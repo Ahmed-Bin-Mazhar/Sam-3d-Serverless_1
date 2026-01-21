@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 WORKDIR /app
 
 # ----------------------------
-# OS deps (needed for building some pip packages)
+# OS deps
 # ----------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates \
@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Kaolin/NVIDIA wheels
+# Kaolin/NVIDIA wheels (must be set BEFORE pip installs)
 ENV PIP_EXTRA_INDEX_URL="https://pypi.nvidia.com" \
     PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.1.0_cu121.html"
 
@@ -37,32 +37,29 @@ RUN pip install runpod huggingface-hub
 RUN git clone https://github.com/facebookresearch/sam-3d-objects.git /app/sam-3d-objects
 
 # ----------------------------
-# Install SAM-3D requirements (BUT exclude PyTorch3D lines)
+# Install SAM3D requirements.txt (requested)
+# NOTE: This step can fail if their requirements include CUDA/C++ builds (e.g. pytorch3d via git).
+# If it fails again, we’ll need to switch back to the “safe-filter + install heavy deps separately” approach.
 # ----------------------------
-RUN echo "===== SAM3D requirements.txt =====" && \
-    sed -n '1,200p' /app/sam-3d-objects/requirements.txt && \
-    echo "==================================" && \
-    # Remove problematic CUDA/C++ deps that often fail from requirements.txt
-    # We'll install them separately in a controlled way.
-    sed -E '/(^pytorch3d\b|^pytorch3d\s*@|^git\+https:\/\/github\.com\/facebookresearch\/pytorch3d)/d' \
-        /app/sam-3d-objects/requirements.txt \
-        > /tmp/sam3d_requirements_no_p3d.txt && \
-    pip install -r /tmp/sam3d_requirements_no_p3d.txt
+RUN pip install -v -r /app/sam-3d-objects/requirements.txt
 
 # ----------------------------
-# Install PyTorch3D separately (official wheel index pattern)
-# - For: Python 3.10, CUDA 12.1, PyTorch 2.1.0
+# Install PyTorch3D wheels (recommended even if requirements installs p3d)
+# For Python 3.10 + CUDA 12.1 + PyTorch 2.1.0
+# If pytorch3d is already installed, pip will keep/upgrade accordingly.
 # ----------------------------
-RUN pip install "pytorch3d" -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt210/download.html
+RUN pip install -v pytorch3d \
+    -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt210/download.html
 
 # ----------------------------
-# Install SAM-3D as editable
+# Install SAM-3D with extras (requested)
+# Using `|| true` exactly as you asked, but for production you should remove it so builds fail loudly.
 # ----------------------------
 WORKDIR /app/sam-3d-objects
 RUN pip install -e ".[inference]" \
  && pip install -e ".[p3d]" \
  && pip install -e ".[dev]" || true
-RUN pip install -r /app/sam-3d-objects/requirements.txt
+
 # ----------------------------
 # Copy handler
 # ----------------------------
