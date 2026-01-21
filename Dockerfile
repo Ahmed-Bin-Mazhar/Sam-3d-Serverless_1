@@ -80,9 +80,11 @@ RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir -e ".[infere
 
 RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir trimesh
 RUN mamba run -n sam3d-objects mamba install -y -c conda-forge open3d
-RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir timm
+# RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir timm
 RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir xatlas
-RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir astor
+# RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir astor
+
+
 
 
 # utils3d pin
@@ -92,7 +94,8 @@ RUN mamba run -n sam3d-objects python -m pip uninstall -y utils3d || true && \
 
 # App deps needed by handler/subprocess (serverless)
 RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir \
-    runpod numpy pillow opencv-python-headless imageio tqdm
+  timm astor easydict einops fvcore iopath yacs \
+  scipy scikit-image imageio opencv-python-headless tqdm runpod numpy pillow
 
 # Quick sanity check
 RUN mamba run -n sam3d-objects python -c "import torch; print('torch ok:', torch.__version__); import utils3d; print('utils3d ok')"
