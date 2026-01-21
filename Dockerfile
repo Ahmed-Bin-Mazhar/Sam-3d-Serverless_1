@@ -52,12 +52,17 @@ RUN mamba run -n sam3d-objects python -m pip install -r /workspace/requirements1
 # ----------------------------
 # Torch + pytorch3d (conda)
 # ----------------------------
-RUN mamba run -n sam3d-objects mamba install -y \
-      -c pytorch -c nvidia -c conda-forge \
-      pytorch torchvision pytorch-cuda=12.1 \
- && mamba run -n sam3d-objects mamba install -y \
-      -c pytorch3d -c pytorch -c nvidia -c conda-forge \
-      pytorch3d
+# (Optional but helps prevent weird solver behavior)
+RUN mamba config --set channel_priority strict
+
+# Install torch into the target env (NO mamba run)
+RUN mamba install -n sam3d-objects -y \
+    -c pytorch -c nvidia -c conda-forge \
+    pytorch torchvision pytorch-cuda=12.1 \
+ && mamba install -n sam3d-objects -y \
+    -c pytorch3d -c pytorch -c nvidia -c conda-forge \
+    pytorch3d
+
 
 # ----------------------------
 # Hugging Face tooling
