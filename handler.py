@@ -4,22 +4,22 @@
 # - Ensures SAM3D checkpoints are downloaded at runtime (Option A) using HF_TOKEN
 # - Accepts base64 image+mask
 # - Runs generate_3d_subprocess.py (isolated process for spconv stability)
-# - Returns outputs (PLY base64, optional GIF base64, optional asset URLs)
+# - Returns outputs in a schema compatible with your client (plyBase64, gifBase64, meshUrl, plyUrl)
 
 import base64
 import os
-import re
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import runpod
 
+
 # ----------------------------
-# Paths (adjust only if you change your container layout)
+# Paths
 # ----------------------------
 REPO_ROOT = Path(__file__).resolve().parent  # /workspace/sam-3d-objects
 CHECKPOINTS_DIR = REPO_ROOT / "checkpoints" / "hf"
@@ -27,13 +27,16 @@ PIPELINE_YAML = CHECKPOINTS_DIR / "pipeline.yaml"
 HF_DOWNLOAD_DIR = REPO_ROOT / "checkpoints" / "hf-download"
 ASSETS_DIR = REPO_ROOT / "assets"
 SUBPROCESS_SCRIPT = REPO_ROOT / "generate_3d_subprocess.py"
-
 LOCK_FILE = REPO_ROOT / ".hf_checkpoints.lock"
 
 
 # ----------------------------
-# Small helpers
+# Helpers
 # ----------------------------
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
 def _b64_to_temp_file(b64_str: str, suffix: str) -> str:
     data = base64.b64decode(b64_str)
     fd, path = tempfile.mkstemp(suffix=suffix)
@@ -49,14 +52,9 @@ def _extract_between(text: str, start: str, end: str) -> Optional[str]:
     return s.split(end, 1)[0].strip()
 
 
-def _ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
-
-
 def _acquire_lock(lock_path: Path, timeout_s: int = 1800) -> None:
     """
     Inter-process file lock to prevent multiple concurrent downloads.
-    Linux-only (RunPod workers are Linux).
     """
     import fcntl
 
@@ -66,8 +64,7 @@ def _acquire_lock(lock_path: Path, timeout_s: int = 1800) -> None:
     while True:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            # Keep handle open by storing on module
-            globals()["_LOCK_HANDLE"] = f
+            globals()["_LOCK_HANDLE"] = f  # keep open
             return
         except BlockingIOError:
             if time.time() - start > timeout_s:
@@ -90,103 +87,146 @@ def _release_lock() -> None:
         globals()["_LOCK_HANDLE"] = None
 
 
-def ensure_checkpoints() -> None:
-    """
-    Option A:
-    - If checkpoints are missing, download them using HF_TOKEN at runtime.
-    - Requires that the model access has been granted to your HF account.
-    """
-    # Fast path: already present
-    if PIPELINE_YAML.exists():
-        return
-
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-    if not hf_token:
+def _hf_token() -> str:
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if not token:
         raise RuntimeError(
             "SAM3D checkpoints are missing and HF_TOKEN (or HUGGINGFACE_TOKEN) is not set."
         )
+    return token
+
+
+def _download_with_cli(token: str) -> None:
+    """
+    Try huggingface-cli download (fast path) if installed.
+    """
+    env = dict(os.environ)
+    env["HF_TOKEN"] = token
+    env.setdefault("HF_HOME", str(REPO_ROOT / ".hf_cache"))
+    env.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+
+    _ensure_dir(HF_DOWNLOAD_DIR)
+
+    cmd = [
+        "huggingface-cli",
+        "download",
+        "--repo-type",
+        "model",
+        "--local-dir",
+        str(HF_DOWNLOAD_DIR),
+        "--max-workers",
+        "1",
+        "facebook/sam-3d-objects",
+    ]
+
+    print("[handler] Downloading checkpoints via huggingface-cli ...", flush=True)
+    subprocess.run(cmd, check=True, env=env, timeout=20 * 60)  # 20 min cap
+
+
+def _download_with_python(token: str) -> None:
+    """
+    Fallback if huggingface-cli is not installed.
+    Uses huggingface_hub snapshot_download.
+    """
+    try:
+        from huggingface_hub import snapshot_download
+    except Exception as e:
+        raise RuntimeError(
+            "huggingface-cli not found and huggingface_hub not available. "
+            "Install: pip install 'huggingface-hub[cli]<1.0'"
+        ) from e
+
+    cache_dir = Path(os.environ.get("HF_HOME", str(REPO_ROOT / ".hf_cache")))
+    _ensure_dir(cache_dir)
+    _ensure_dir(HF_DOWNLOAD_DIR)
+
+    print("[handler] Downloading checkpoints via huggingface_hub.snapshot_download ...", flush=True)
+
+    # Download into cache, then copy into HF_DOWNLOAD_DIR
+    local_repo_dir = snapshot_download(
+        repo_id="facebook/sam-3d-objects",
+        repo_type="model",
+        token=token,
+        cache_dir=str(cache_dir),
+        local_dir=str(HF_DOWNLOAD_DIR),
+        local_dir_use_symlinks=False,
+        max_workers=1,
+    )
+
+    # snapshot_download may return the same local_dir; just sanity-check
+    if not Path(local_repo_dir).exists():
+        raise RuntimeError("snapshot_download did not produce a valid local directory.")
+
+
+def _move_download_into_place() -> None:
+    """
+    HF download layout: hf-download/checkpoints/*
+    Destination: checkpoints/hf/*
+    """
+    src = HF_DOWNLOAD_DIR / "checkpoints"
+    dst = CHECKPOINTS_DIR
+
+    if not src.exists():
+        raise RuntimeError(
+            f"Download completed but expected '{src}' not found. "
+            f"Contents: {list(HF_DOWNLOAD_DIR.glob('*'))}"
+        )
+
+    _ensure_dir(dst.parent)
+    if dst.exists():
+        # remove old files to avoid mixing partial states
+        for p in dst.glob("*"):
+            try:
+                if p.is_file():
+                    p.unlink()
+            except Exception:
+                pass
+    else:
+        dst.mkdir(parents=True, exist_ok=True)
+
+    for item in src.iterdir():
+        target = dst / item.name
+        if target.exists() and target.is_file():
+            target.unlink()
+        item.rename(target)
+
+    # Cleanup download dir
+    try:
+        import shutil
+        shutil.rmtree(HF_DOWNLOAD_DIR, ignore_errors=True)
+    except Exception:
+        pass
+
+    if not PIPELINE_YAML.exists():
+        raise RuntimeError(f"pipeline.yaml not found at {PIPELINE_YAML} after move")
+
+
+def ensure_checkpoints() -> None:
+    """
+    Option A runtime checkpoint bootstrap.
+    """
+    if PIPELINE_YAML.exists():
+        return
+
+    token = _hf_token()
 
     _acquire_lock(LOCK_FILE)
     try:
-        # Re-check after acquiring lock
         if PIPELINE_YAML.exists():
             return
 
         _ensure_dir(ASSETS_DIR)
-        _ensure_dir(HF_DOWNLOAD_DIR)
 
-        # We rely on huggingface-cli being installed in the env.
-        # Provide token via env so it authenticates.
-        env = dict(os.environ)
-        env["HF_TOKEN"] = hf_token
-        # Optional cache dir to reduce repeated downloads (can be on a network volume if you mount one)
-        env.setdefault("HF_HOME", str(REPO_ROOT / ".hf_cache"))
-
-        cmd = [
-            "huggingface-cli",
-            "download",
-            "--repo-type",
-            "model",
-            "--local-dir",
-            str(HF_DOWNLOAD_DIR),
-            "--max-workers",
-            "1",
-            "facebook/sam-3d-objects",
-        ]
-
-        print("[handler] Downloading SAM3D checkpoints (gated HF repo) ...")
-        subprocess.run(cmd, check=True, env=env)
-
-        # Expected layout from HF: hf-download/checkpoints/*
-        src = HF_DOWNLOAD_DIR / "checkpoints"
-        dst = CHECKPOINTS_DIR
-
-        if not src.exists():
-            raise RuntimeError(
-                f"Download completed but expected '{src}' not found. "
-                f"Contents: {list(HF_DOWNLOAD_DIR.glob('*'))}"
-            )
-
-        # Move into expected path
-        _ensure_dir(dst.parent)
-        if dst.exists():
-            # If something partial exists, remove it to avoid mixing
-            for p in dst.glob("*"):
-                try:
-                    if p.is_file():
-                        p.unlink()
-                except Exception:
-                    pass
-        else:
-            dst.mkdir(parents=True, exist_ok=True)
-
-        # Move all files from src -> dst
-        for item in src.iterdir():
-            target = dst / item.name
-            if target.exists():
-                if target.is_file():
-                    target.unlink()
-            item.rename(target)
-
-        # Cleanup download dir
+        # Try CLI first, fallback to Python if CLI isn't installed.
+        t0 = time.time()
         try:
-            for p in HF_DOWNLOAD_DIR.glob("*"):
-                if p.is_dir():
-                    # best effort cleanup
-                    pass
-            # Remove the whole hf-download folder
-            import shutil
+            _download_with_cli(token)
+        except FileNotFoundError:
+            print("[handler] huggingface-cli not found; falling back to python download...", flush=True)
+            _download_with_python(token)
 
-            shutil.rmtree(HF_DOWNLOAD_DIR, ignore_errors=True)
-        except Exception:
-            pass
-
-        if not PIPELINE_YAML.exists():
-            raise RuntimeError(
-                f"Checkpoints moved but pipeline.yaml not found at {PIPELINE_YAML}"
-            )
-
-        print(f"[handler] ✓ Checkpoints ready at: {CHECKPOINTS_DIR}")
+        _move_download_into_place()
+        print(f"[handler] ✓ Checkpoints ready in {time.time()-t0:.1f}s at {CHECKPOINTS_DIR}", flush=True)
 
     finally:
         _release_lock()
@@ -199,7 +239,6 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
     try:
         image_path = _b64_to_temp_file(image_b64, ".png")
         mask_path = _b64_to_temp_file(mask_b64, ".png")
-
         out_ply_path = os.path.join(
             tempfile.gettempdir(), f"out_{os.getpid()}_{int(time.time())}.ply"
         )
@@ -217,19 +256,23 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
             str(ASSETS_DIR),
         ]
 
+        print("[handler] Starting subprocess generation...", flush=True)
+        t0 = time.time()
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=600,  # 10 min
+            timeout=600,  # 10 minutes
             cwd=str(REPO_ROOT),
         )
 
         stdout = result.stdout or ""
         stderr = result.stderr or ""
 
+        print(f"[handler] Subprocess finished in {time.time()-t0:.1f}s (rc={result.returncode})", flush=True)
+
         if result.returncode != 0:
-            # Return helpful tail
             return {
                 "success": False,
                 "error": "3D generation subprocess failed",
@@ -251,12 +294,12 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
 
         return {
             "success": True,
-            "ply_b64": ply_b64_out,  # may be None if only GIF exists
+            "ply_b64": ply_b64_out,
             "ply_size_bytes": ply_size,
-            "gif_b64": gif_b64_out,  # may be None
-            "mesh_url": mesh_url,    # may be None
-            "ply_url": ply_url,      # may be None
-            "stdout_tail": stdout[-2000:],  # helpful for debugging, trim if you want
+            "gif_b64": gif_b64_out,
+            "mesh_url": mesh_url,
+            "ply_url": ply_url,
+            "stdout_tail": stdout[-2000:],
         }
 
     finally:
@@ -270,55 +313,62 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
 
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Expected input payload (RunPod job['input']):
+    Supports BOTH payload styles:
 
+    Style A (recommended):
     {
-      "imageBase64": "<base64 PNG/JPG>",
-      "maskBase64":  "<base64 PNG mask>",
-      "seed": 42,
-      "return": ["ply_b64", "gif_b64", "mesh_url", "ply_url"]   # optional
+      "imageBase64": "...",
+      "maskBase64":  "...",
+      "seed": 42
     }
 
-    Notes:
-    - If you want smaller responses, request only URLs (mesh_url/ply_url) and omit base64.
-    - Ensure HF_TOKEN is set in the worker environment for gated checkpoints.
+    Style B (your client):
+    {
+      "imageBase64": "...",
+      "maskBase64":  "...",
+      "options": {"output": ["ply"], "seed": 42}
+    }
+
+    Returns schema compatible with your client:
+    {
+      "success": true,
+      "plyBase64": "...",
+      "gifBase64": "...",
+      "meshUrl": "...",
+      "plyUrl": "..."
+    }
     """
     inp = job.get("input") or {}
 
     image_b64 = inp.get("imageBase64") or inp.get("image")
     mask_b64 = inp.get("maskBase64") or inp.get("mask")
-    seed = int(inp.get("seed", 42))
+
+    opts = inp.get("options") or {}
+    seed = int(inp.get("seed", opts.get("seed", 42)))
 
     if not image_b64 or not mask_b64:
-        return {
-            "success": False,
-            "error": "Missing 'imageBase64' and/or 'maskBase64' in job.input",
-        }
+        return {"success": False, "error": "Missing imageBase64/maskBase64 in job.input"}
 
-    # Ensure checkpoints (Option A)
+    # Checkpoints bootstrap (Option A)
     try:
         ensure_checkpoints()
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"Checkpoint bootstrap failed: {str(e)}",
-        }
+        return {"success": False, "error": f"Checkpoint bootstrap failed: {str(e)}"}
 
-    # Run generation
+    # Run inference
     out = run_generation(image_b64, mask_b64, seed)
 
-    # Optional: allow caller to request a subset of outputs
-    want = inp.get("return")
-    if isinstance(want, list) and out.get("success"):
-        filtered = {"success": True}
-        for k in want:
-            if k in out:
-                filtered[k] = out[k]
-        # Always keep these if present
-        for k in ["ply_size_bytes"]:
-            if k in out:
-                filtered[k] = out[k]
-        return filtered
+    # Map to client schema
+    if out.get("success"):
+        return {
+            "success": True,
+            "plyBase64": out.get("ply_b64"),
+            "gifBase64": out.get("gif_b64"),
+            "meshUrl": out.get("mesh_url"),
+            "plyUrl": out.get("ply_url"),
+            # Optional debug (comment out if you want smaller responses)
+            # "plySizeBytes": out.get("ply_size_bytes"),
+        }
 
     return out
 

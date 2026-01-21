@@ -30,6 +30,8 @@ ENV PATH=/opt/conda/bin:$PATH
 SHELL ["/bin/bash", "-lc"]
 ENV CONDA_AUTO_ACTIVATE_BASE=false
 
+
+
 # ----------------------------
 # Clone SAM3D repo (your fork)
 # ----------------------------
@@ -40,6 +42,11 @@ WORKDIR /workspace/sam-3d-objects
 # Create conda env (explicit name to avoid surprises)
 # ----------------------------
 RUN mamba env create -n sam3d-objects -f environments/default.yml
+
+RUN mamba run -n sam3d-objects pip install --no-cache-dir "huggingface-hub[cli]<1.0"
+RUN mamba run -n sam3d-objects huggingface-cli --version
+
+
 
 # Fix the binutils activate script issue you saw earlier
 RUN rm -f /opt/conda/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_linux-64.sh 2>/dev/null || true
