@@ -1,11 +1,11 @@
 # handler.py
 #
-# RunPod Serverless handler for SAM-3D-Objects:
-# - Ensures SAM3D checkpoints are downloaded at runtime (Option A) using HF_TOKEN
-# - Uses RunPod network volume "sam3d" to avoid ephemeral disk limits
+# RunPod Serverless handler for SAM-3D-Objects (Option A):
+# - Downloads gated checkpoints at runtime using HF_TOKEN
+# - Uses RunPod Network Volume (auto-detects sam3d* mount under /runpod-volume)
 # - Accepts base64 image+mask
-# - Runs generate_3d_subprocess.py (isolated process for spconv stability)
-# - Returns outputs in a schema compatible with your client (plyBase64, gifBase64, meshUrl, plyUrl)
+# - Runs generate_3d_subprocess.py in a separate process
+# - Returns schema compatible with your client: plyBase64, gifBase64, meshUrl, plyUrl
 
 import base64
 import os
@@ -19,12 +19,47 @@ from typing import Any, Dict, Optional
 
 import runpod
 
+
 # ----------------------------
-# Paths (RunPod Volume: sam3d)
+# Paths (auto-detect RunPod volume sam3d*)
 # ----------------------------
 REPO_ROOT = Path(__file__).resolve().parent  # /workspace/sam-3d-objects
+RUNPOD_VOLUME_ROOT = Path("/runpod-volume")
 
-VOLUME_ROOT = Path("/runpod-volume/sam3d-eu-cz-1")
+
+def _detect_volume(prefix: str = "sam3d") -> Path:
+    """
+    Detect a mounted RunPod volume directory under /runpod-volume that starts with `prefix`.
+    Example matches:
+      /runpod-volume/sam3d-
+      /runpod-volume/sam3d-eu-cz-1
+      /runpod-volume/sam3d-12345
+
+    Best practice: set SAM3D_VOLUME_DIR to the exact full path to avoid any ambiguity.
+    """
+    override = os.environ.get("SAM3D_VOLUME_DIR")
+    if override:
+        return Path(override)
+
+    if not RUNPOD_VOLUME_ROOT.exists():
+        raise RuntimeError("'/runpod-volume' does not exist. Volume is not mounted.")
+
+    candidates = [
+        p for p in RUNPOD_VOLUME_ROOT.iterdir()
+        if p.is_dir() and p.name.startswith(prefix)
+    ]
+
+    if not candidates:
+        existing = [p.name for p in RUNPOD_VOLUME_ROOT.iterdir()]
+        raise RuntimeError(
+            f"No volume starting with '{prefix}' found under /runpod-volume. Found: {existing}"
+        )
+
+    # if multiple, pick the first sorted name (usually there is only one)
+    return sorted(candidates, key=lambda p: p.name)[0]
+
+
+VOLUME_ROOT = _detect_volume(prefix=os.environ.get("SAM3D_VOLUME_PREFIX", "sam3d"))
 
 CHECKPOINTS_DIR = VOLUME_ROOT / "checkpoints" / "hf"
 PIPELINE_YAML = CHECKPOINTS_DIR / "pipeline.yaml"
@@ -61,9 +96,6 @@ def _extract_between(text: str, start: str, end: str) -> Optional[str]:
 
 
 def _acquire_lock(lock_path: Path, timeout_s: int = 1800) -> None:
-    """
-    Inter-process file lock to prevent multiple concurrent downloads.
-    """
     import fcntl
 
     _ensure_dir(lock_path.parent)
@@ -72,7 +104,7 @@ def _acquire_lock(lock_path: Path, timeout_s: int = 1800) -> None:
     while True:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            globals()["_LOCK_HANDLE"] = f  # keep open
+            globals()["_LOCK_HANDLE"] = f
             return
         except BlockingIOError:
             if time.time() - start > timeout_s:
@@ -104,31 +136,24 @@ def _hf_token() -> str:
     return token
 
 
-def _preflight_volume() -> None:
-    """
-    Ensure the RunPod volume is mounted and writable.
-    """
-    if not VOLUME_ROOT.exists():
-        raise RuntimeError(
-            f"RunPod volume not found at {VOLUME_ROOT}. Attach volume 'sam3d' to /runpod-volume."
-        )
+def _preflight_storage() -> None:
+    # Ensure the detected volume is writable
     _ensure_dir(HF_CACHE_DIR)
     _ensure_dir(HF_DOWNLOAD_DIR.parent)
     _ensure_dir(CHECKPOINTS_DIR.parent)
 
-    # simple write test
     test_file = VOLUME_ROOT / ".write_test"
     try:
         test_file.write_text("ok", encoding="utf-8")
-        test_file.unlink(missing_ok=True)  # py3.11+
+        test_file.unlink(missing_ok=True)
     except Exception as e:
-        raise RuntimeError(f"RunPod volume not writable at {VOLUME_ROOT}: {e}") from e
+        raise RuntimeError(f"Volume not writable at {VOLUME_ROOT}: {e}") from e
 
 
 def _download_with_cli(token: str) -> None:
     """
     Try huggingface-cli download (fast path) if installed.
-    Uses the volume for HF_HOME and download target to avoid ephemeral disk limits.
+    Writes cache + downloads to the mounted volume.
     """
     env = dict(os.environ)
     env["HF_TOKEN"] = token
@@ -149,6 +174,7 @@ def _download_with_cli(token: str) -> None:
         "facebook/sam-3d-objects",
     ]
 
+    print(f"[handler] Using volume: {VOLUME_ROOT}", flush=True)
     print("[handler] Downloading checkpoints via huggingface-cli ...", flush=True)
     subprocess.run(cmd, check=True, env=env, timeout=30 * 60)  # 30 min cap
 
@@ -157,7 +183,7 @@ def _download_with_python(token: str) -> None:
     """
     Fallback if huggingface-cli is not installed.
     Uses huggingface_hub snapshot_download.
-    Writes both cache and local_dir to the mounted volume.
+    Writes cache + downloads to the mounted volume.
     """
     try:
         from huggingface_hub import snapshot_download
@@ -170,6 +196,7 @@ def _download_with_python(token: str) -> None:
     _ensure_dir(HF_CACHE_DIR)
     _ensure_dir(HF_DOWNLOAD_DIR)
 
+    print(f"[handler] Using volume: {VOLUME_ROOT}", flush=True)
     print("[handler] Downloading checkpoints via huggingface_hub.snapshot_download ...", flush=True)
 
     local_repo_dir = snapshot_download(
@@ -178,7 +205,7 @@ def _download_with_python(token: str) -> None:
         token=token,
         cache_dir=str(HF_CACHE_DIR),
         local_dir=str(HF_DOWNLOAD_DIR),
-        local_dir_use_symlinks=False,  # ok even if deprecated; harmless
+        local_dir_use_symlinks=False,  # deprecated but harmless
         max_workers=1,
     )
 
@@ -231,13 +258,12 @@ def _move_download_into_place() -> None:
 
 def ensure_checkpoints() -> None:
     """
-    Option A runtime checkpoint bootstrap.
-    Uses the RunPod volume to avoid disk-space limits.
+    Option A runtime checkpoint bootstrap on the mounted volume.
     """
     if PIPELINE_YAML.exists():
         return
 
-    _preflight_volume()
+    _preflight_storage()
     token = _hf_token()
 
     _acquire_lock(LOCK_FILE)
@@ -338,30 +364,27 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
 
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Supports BOTH payload styles:
+    Input:
+      {
+        "imageBase64": "...",
+        "maskBase64": "...",
+        "seed": 42
+      }
+    or (your client):
+      {
+        "imageBase64": "...",
+        "maskBase64": "...",
+        "options": {"seed": 42, "output": ["ply"]}
+      }
 
-    Style A:
-    {
-      "imageBase64": "...",
-      "maskBase64":  "...",
-      "seed": 42
-    }
-
-    Style B (your client):
-    {
-      "imageBase64": "...",
-      "maskBase64":  "...",
-      "options": {"output": ["ply"], "seed": 42}
-    }
-
-    Returns schema compatible with your client:
-    {
-      "success": true,
-      "plyBase64": "...",
-      "gifBase64": "...",
-      "meshUrl": "...",
-      "plyUrl": "..."
-    }
+    Output (client-compatible):
+      {
+        "success": true,
+        "plyBase64": "...",
+        "gifBase64": "...",
+        "meshUrl": "...",
+        "plyUrl": "..."
+      }
     """
     inp = job.get("input") or {}
 
