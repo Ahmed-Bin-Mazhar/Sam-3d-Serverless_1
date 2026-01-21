@@ -1,12 +1,6 @@
-# handler.py — RunPod Serverless SAM-3D Objects
-# - Robust cold-start checkpoint download to /runpod-volume
-# - Warm model load (once per worker)
-# - Strict input validation
-# - Safe temp-file handling
-# - Keeps the process alive even if RunPod listener returns (prevents auto-stop loops)
-
 import base64
 import os
+import sys
 import tempfile
 import time
 import traceback
@@ -15,7 +9,11 @@ from typing import Dict, Any
 import runpod
 import torch
 from huggingface_hub import snapshot_download
-print("RUNPOD QUEUE WORKER BOOTING", flush=True)
+
+# -------------------------------------------------
+# CRITICAL FIX: inference.py expects CONDA_PREFIX
+# -------------------------------------------------
+os.environ.setdefault("CONDA_PREFIX", "/opt/conda")
 
 # -------------------------------------------------
 # Paths / env
@@ -28,22 +26,11 @@ HF_CACHE_DIR = f"{VOLUME_ROOT}/hf_cache"
 HF_TOKEN = os.environ.get("HF_TOKEN")
 HF_HOME = os.environ.get("HF_HOME", HF_CACHE_DIR)
 
-# (Optional) reduce CPU thread oversubscription
-# Uncomment if you see high CPU usage:
-# os.environ.setdefault("OMP_NUM_THREADS", "4")
-# os.environ.setdefault("MKL_NUM_THREADS", "4")
-# torch.set_num_threads(4)
-
 # -------------------------------------------------
 # Import SAM-3D inference code
 # -------------------------------------------------
-# The repo is cloned to /app/sam-3d-objects in the Dockerfile.
-# The inference module lives under /app/sam-3d-objects/notebook.
-import sys
 sys.path.insert(0, "/app/sam-3d-objects/notebook")
-
 from inference import Inference, load_image, load_single_mask  # noqa: E402
-
 
 # -------------------------------------------------
 # Checkpoints (cold start)

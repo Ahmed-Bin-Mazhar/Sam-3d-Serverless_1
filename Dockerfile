@@ -67,7 +67,7 @@ RUN pip install -e ".[inference]" \
 
 # NOTE: If any of these extras fail due to optional deps, you can remove "|| true"
 # and fix the missing dependency explicitly (recommended for production).
-
+ENV CONDA_PREFIX=/opt/conda
 # ----------------------------
 # Copy handler
 # ----------------------------
