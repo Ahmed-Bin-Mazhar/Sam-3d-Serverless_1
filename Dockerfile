@@ -30,7 +30,7 @@ COPY requirements.txt /workspace/requirements.txt
 COPY handler.py /workspace/handler.py
 COPY generate_3d_subprocess.py /workspace/generate_3d_subprocess.py
 # (Optional) only if you still want FastAPI local runs; serverless doesn't need it
-COPY api.py /workspace/api.py
+# COPY api.py /workspace/api.py
 
 # ----------------------------
 # Clone SAM3D repo
