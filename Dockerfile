@@ -83,25 +83,6 @@ RUN mamba run -n sam3d-objects pip install --no-cache-dir \
 # Quick sanity check
 RUN mamba run -n sam3d-objects python -c "import torch; print('torch ok:', torch.__version__); import utils3d; print('utils3d ok')"
 
-# ----------------------------
-# Download checkpoints at build time (avoids cold-start downloads)
-# Produces: /workspace/sam-3d-objects/checkpoints/hf/pipeline.yaml
-# ----------------------------
-RUN mamba run -n sam3d-objects bash -lc '\
-  set -e; \
-  TAG=hf; \
-  if [ ! -d "checkpoints/${TAG}" ]; then \
-    mkdir -p checkpoints; \
-    huggingface-cli download \
-      --repo-type model \
-      --local-dir checkpoints/${TAG}-download \
-      --max-workers 1 \
-      facebook/sam-3d-objects; \
-    mv checkpoints/${TAG}-download/checkpoints checkpoints/${TAG}; \
-    rm -rf checkpoints/${TAG}-download; \
-  else \
-    echo "Checkpoints already present, skipping."; \
-  fi'
 
 # ----------------------------
 # Copy serverless entrypoints
