@@ -5,7 +5,12 @@
 # - Uses RunPod Network Volume (auto-detects sam3d* mount under /runpod-volume)
 # - Accepts base64 image+mask
 # - Runs generate_3d_subprocess.py in a separate process
+# - Fixes KeyError: CONDA_PREFIX by injecting CONDA_PREFIX/CUDA_HOME into subprocess env
 # - Returns schema compatible with your client: plyBase64, gifBase64, meshUrl, plyUrl
+#
+# Notes on warnings:
+# - open3d missing => mesh simplification disabled (OK for PLY output)
+# - trimesh missing => only needed for GLB conversion/export (OK for PLY output)
 
 import base64
 import os
@@ -30,12 +35,9 @@ RUNPOD_VOLUME_ROOT = Path("/runpod-volume")
 def _detect_volume(prefix: str = "sam3d") -> Path:
     """
     Detect a mounted RunPod volume directory under /runpod-volume that starts with `prefix`.
-    Example matches:
-      /runpod-volume/sam3d-
-      /runpod-volume/sam3d-eu-cz-1
-      /runpod-volume/sam3d-12345
 
-    Best practice: set SAM3D_VOLUME_DIR to the exact full path to avoid any ambiguity.
+    Best practice (optional): set SAM3D_VOLUME_DIR to the exact full path to avoid ambiguity.
+      e.g. SAM3D_VOLUME_DIR=/runpod-volume/sam3d-eu-cz-1
     """
     override = os.environ.get("SAM3D_VOLUME_DIR")
     if override:
@@ -55,7 +57,6 @@ def _detect_volume(prefix: str = "sam3d") -> Path:
             f"No volume starting with '{prefix}' found under /runpod-volume. Found: {existing}"
         )
 
-    # if multiple, pick the first sorted name (usually there is only one)
     return sorted(candidates, key=lambda p: p.name)[0]
 
 
@@ -137,7 +138,6 @@ def _hf_token() -> str:
 
 
 def _preflight_storage() -> None:
-    # Ensure the detected volume is writable
     _ensure_dir(HF_CACHE_DIR)
     _ensure_dir(HF_DOWNLOAD_DIR.parent)
     _ensure_dir(CHECKPOINTS_DIR.parent)
@@ -151,10 +151,6 @@ def _preflight_storage() -> None:
 
 
 def _download_with_cli(token: str) -> None:
-    """
-    Try huggingface-cli download (fast path) if installed.
-    Writes cache + downloads to the mounted volume.
-    """
     env = dict(os.environ)
     env["HF_TOKEN"] = token
     env["HF_HOME"] = str(HF_CACHE_DIR)
@@ -176,15 +172,10 @@ def _download_with_cli(token: str) -> None:
 
     print(f"[handler] Using volume: {VOLUME_ROOT}", flush=True)
     print("[handler] Downloading checkpoints via huggingface-cli ...", flush=True)
-    subprocess.run(cmd, check=True, env=env, timeout=30 * 60)  # 30 min cap
+    subprocess.run(cmd, check=True, env=env, timeout=30 * 60)
 
 
 def _download_with_python(token: str) -> None:
-    """
-    Fallback if huggingface-cli is not installed.
-    Uses huggingface_hub snapshot_download.
-    Writes cache + downloads to the mounted volume.
-    """
     try:
         from huggingface_hub import snapshot_download
     except Exception as e:
@@ -205,7 +196,7 @@ def _download_with_python(token: str) -> None:
         token=token,
         cache_dir=str(HF_CACHE_DIR),
         local_dir=str(HF_DOWNLOAD_DIR),
-        local_dir_use_symlinks=False,  # deprecated but harmless
+        local_dir_use_symlinks=False,
         max_workers=1,
     )
 
@@ -214,10 +205,6 @@ def _download_with_python(token: str) -> None:
 
 
 def _move_download_into_place() -> None:
-    """
-    HF download layout: hf-download/checkpoints/*
-    Destination: checkpoints/hf/*
-    """
     src = HF_DOWNLOAD_DIR / "checkpoints"
     dst = CHECKPOINTS_DIR
 
@@ -229,7 +216,7 @@ def _move_download_into_place() -> None:
 
     _ensure_dir(dst)
 
-    # clean destination to avoid partial state
+    # clean destination
     for p in dst.glob("*"):
         try:
             if p.is_file():
@@ -239,7 +226,6 @@ def _move_download_into_place() -> None:
         except Exception:
             pass
 
-    # move everything into place
     for item in src.iterdir():
         target = dst / item.name
         if target.exists():
@@ -249,7 +235,6 @@ def _move_download_into_place() -> None:
                 shutil.rmtree(target, ignore_errors=True)
         item.rename(target)
 
-    # cleanup download dir
     shutil.rmtree(HF_DOWNLOAD_DIR, ignore_errors=True)
 
     if not PIPELINE_YAML.exists():
@@ -257,9 +242,6 @@ def _move_download_into_place() -> None:
 
 
 def ensure_checkpoints() -> None:
-    """
-    Option A runtime checkpoint bootstrap on the mounted volume.
-    """
     if PIPELINE_YAML.exists():
         return
 
@@ -287,6 +269,28 @@ def ensure_checkpoints() -> None:
         _release_lock()
 
 
+def _build_subprocess_env() -> Dict[str, str]:
+    """
+    Serverless does not 'conda activate', so notebook/inference.py may crash with KeyError: CONDA_PREFIX.
+    We inject CONDA_PREFIX and CUDA_HOME for the subprocess.
+    """
+    env = os.environ.copy()
+
+    conda_prefix = env.get("CONDA_PREFIX")
+    if not conda_prefix:
+        exe = Path(sys.executable).resolve()
+        # /opt/conda/envs/sam3d-objects/bin/python -> /opt/conda/envs/sam3d-objects
+        conda_prefix = str(exe.parent.parent)
+        env["CONDA_PREFIX"] = conda_prefix
+
+    env.setdefault("CUDA_HOME", conda_prefix)
+
+    # Keep HF cache on the volume for any hub access during runtime
+    env.setdefault("HF_HOME", str(HF_CACHE_DIR))
+
+    return env
+
+
 def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
     _ensure_dir(ASSETS_DIR)
 
@@ -311,6 +315,8 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
             str(ASSETS_DIR),
         ]
 
+        env = _build_subprocess_env()
+
         print("[handler] Starting subprocess generation...", flush=True)
         t0 = time.time()
 
@@ -318,8 +324,9 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=600,  # 10 minutes
+            timeout=600,
             cwd=str(REPO_ROOT),
+            env=env,  # <<< critical fix for CONDA_PREFIX
         )
 
         stdout = result.stdout or ""
@@ -363,29 +370,6 @@ def run_generation(image_b64: str, mask_b64: str, seed: int) -> Dict[str, Any]:
 
 
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Input:
-      {
-        "imageBase64": "...",
-        "maskBase64": "...",
-        "seed": 42
-      }
-    or (your client):
-      {
-        "imageBase64": "...",
-        "maskBase64": "...",
-        "options": {"seed": 42, "output": ["ply"]}
-      }
-
-    Output (client-compatible):
-      {
-        "success": true,
-        "plyBase64": "...",
-        "gifBase64": "...",
-        "meshUrl": "...",
-        "plyUrl": "..."
-      }
-    """
     inp = job.get("input") or {}
 
     image_b64 = inp.get("imageBase64") or inp.get("image")

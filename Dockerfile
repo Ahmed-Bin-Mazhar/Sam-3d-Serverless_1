@@ -54,6 +54,10 @@ RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir "huggingface
     mamba run -n sam3d-objects python -c "import huggingface_hub; print('huggingface_hub', huggingface_hub.__version__)" && \
     mamba run -n sam3d-objects huggingface-cli --help >/dev/null
 
+
+RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir trimesh
+RUN mamba run -n sam3d-objects mamba install -y -c conda-forge open3d
+
 # ----------------------------
 # Install PyTorch CUDA 12.1
 # ----------------------------
