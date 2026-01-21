@@ -1,146 +1,124 @@
-import os
-import sys
 import base64
-import io
+import os
 import tempfile
-from typing import Any, Dict, Optional, List
-
-import numpy as np
-from PIL import Image
+import subprocess
+import sys
+from typing import Dict, Any
 
 import runpod
 
-# Make notebook inference importable (matches repo usage)
-# The SAM3D repo keeps inference.py under "notebook"
-sys.path.append("/workspace/sam-3d-objects/notebook")
-from inference import Inference  # type: ignore  # noqa: E402
+# If you keep your subprocess next to handler.py
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SUBPROCESS_SCRIPT = os.path.join(SCRIPT_DIR, "generate_3d_subprocess.py")
+
+# RunPod best practice: do heavy imports lazily / in subprocess (you already do)
+# So the handler stays lightweight and avoids spconv state issues.
+# generate_3d_subprocess.py already sets critical env-vars before torch import. :contentReference[oaicite:2]{index=2}
 
 
-# -----------------------------
-# Warm model load (one per worker)
-# -----------------------------
-TAG = os.environ.get("SAM3D_TAG", "hf")
-CONFIG_PATH = os.environ.get("SAM3D_CONFIG", f"checkpoints/{TAG}/pipeline.yaml")
-
-_infer: Optional[Inference] = None
-
-
-def get_infer() -> Inference:
-    global _infer
-    if _infer is None:
-        # compile=False is safer for serverless stability
-        _infer = Inference(CONFIG_PATH, compile=False)
-    return _infer
-
-
-# -----------------------------
-# Helpers: base64 <-> arrays/files
-# -----------------------------
-def b64_to_rgb_np(b64_str: str) -> np.ndarray:
+def _b64_to_file(b64_str: str, suffix: str) -> str:
     raw = base64.b64decode(b64_str)
-    img = Image.open(io.BytesIO(raw)).convert("RGB")
-    return np.array(img, dtype=np.uint8)
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    with os.fdopen(fd, "wb") as f:
+        f.write(raw)
+    return path
 
 
-def b64_to_mask_np(b64_str: str, width: int, height: int) -> np.ndarray:
-    """
-    Frontend sends a PNG mask (often RGBA with alpha paint).
-    Convert to binary (0/1) and resize to match image.
-    """
-    raw = base64.b64decode(b64_str)
-    m = Image.open(io.BytesIO(raw))
-
-    if m.mode == "RGBA":
-        # Use alpha channel as mask
-        alpha = m.split()[-1]
-        m = alpha
-    else:
-        # Use luminance
-        m = m.convert("L")
-
-    m = m.resize((width, height), resample=Image.NEAREST)
-    arr = np.array(m, dtype=np.uint8)
-    return (arr > 0).astype(np.uint8)
-
-
-def file_to_b64(path: str) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def _get_outputs_list(options: Any) -> List[str]:
-    # options may be dict or None
-    if not isinstance(options, dict):
-        return ["ply"]
-    out = options.get("output", ["ply"])
-    if isinstance(out, list):
-        return [str(x).lower() for x in out]
-    # allow "ply,glb" string etc.
-    if isinstance(out, str):
-        return [x.strip().lower() for x in out.split(",") if x.strip()]
-    return ["ply"]
-
-
-# -----------------------------
-# RunPod handler
-# -----------------------------
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    RunPod job payload:
-      job = { "id": "...", "input": { ... } }
+    RunPod Serverless handler
+    Input:  job["input"]["imageBase64"], job["input"]["maskBase64"], job["input"]["seed"]
+    Output: base64 PLY (+ GIF/GLB URLs if produced by subprocess)
     """
-    inp = job.get("input", {}) if isinstance(job, dict) else {}
+    inp = job.get("input", {}) or {}
 
-    image_b64 = inp.get("imageBase64")
-    mask_b64 = inp.get("maskBase64")
-    options = inp.get("options", {})
+    image_b64 = inp.get("imageBase64") or inp.get("image")
+    mask_b64 = inp.get("maskBase64") or inp.get("mask")
+    seed = int(inp.get("seed", 42))
 
     if not image_b64 or not mask_b64:
-        return {"error": "imageBase64 and maskBase64 are required"}
+        return {
+            "error": "Missing imageBase64/maskBase64 (or image/mask).",
+            "expected": {
+                "imageBase64": "base64-encoded PNG/JPG bytes",
+                "maskBase64": "base64-encoded PNG bytes (binary mask)",
+                "seed": 42
+            }
+        }
 
-    seed = int(options.get("seed", 42)) if isinstance(options, dict) else 42
-    outputs = _get_outputs_list(options)
+    image_path = mask_path = ply_out_path = None
 
-    # Decode input
-    image = b64_to_rgb_np(image_b64)
-    mask = b64_to_mask_np(mask_b64, image.shape[1], image.shape[0])
+    try:
+        image_path = _b64_to_file(image_b64, suffix=".png")
+        mask_path = _b64_to_file(mask_b64, suffix=".png")
 
-    # Run inference
-    infer = get_infer()
-    out = infer(image, mask, seed=seed)
+        # output ply path
+        with tempfile.NamedTemporaryFile(suffix=".ply", delete=False) as tmp:
+            ply_out_path = tmp.name
 
-    result: Dict[str, Any] = {"meta": {"seed": seed}}
+        # assets directory inside container (subprocess will write URLs relative to /assets)
+        assets_dir = os.path.join(SCRIPT_DIR, "assets")
+        os.makedirs(assets_dir, exist_ok=True)
 
-    # Export requested formats
-    with tempfile.TemporaryDirectory() as td:
-        # PLY via gaussian splat
-        if "ply" in outputs:
-            ply_path = os.path.join(td, "out.ply")
-            if isinstance(out, dict) and "gs" in out and hasattr(out["gs"], "save_ply"):
-                out["gs"].save_ply(ply_path)
-                result["plyBase64"] = file_to_b64(ply_path)
-            else:
-                return {"error": "PLY requested but out['gs'].save_ply not available"}
+        # Run the subprocess (SAM3D inference)
+        # It prints markers: GIF_DATA_START/END, MESH_URL_START/END, PLY_URL_START/END :contentReference[oaicite:3]{index=3}
+        result = subprocess.run(
+            [sys.executable, SUBPROCESS_SCRIPT, image_path, mask_path, str(seed), ply_out_path, assets_dir],
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
 
-        # GLB via mesh export (try common method names)
-        if "glb" in outputs:
-            glb_path = os.path.join(td, "out.glb")
-            mesh_obj = out.get("mesh") if isinstance(out, dict) else None
-            if mesh_obj is None:
-                return {"error": "GLB requested but out['mesh'] is missing"}
+        if result.returncode != 0:
+            return {
+                "error": "SAM3D subprocess failed",
+                "stderr": result.stderr[-4000:],
+                "stdout": result.stdout[-4000:],
+            }
 
-            if hasattr(mesh_obj, "to_glb"):
-                mesh_obj.to_glb(glb_path)
-            elif hasattr(mesh_obj, "save_glb"):
-                mesh_obj.save_glb(glb_path)
-            elif hasattr(mesh_obj, "export"):
-                mesh_obj.export(glb_path)
-            else:
-                return {"error": "GLB requested but mesh export method not found on out['mesh']"}
+        # Always return PLY as base64 (primary artifact)
+        if not os.path.exists(ply_out_path):
+            return {"error": "PLY output missing after subprocess completed."}
 
-            result["glbBase64"] = file_to_b64(glb_path)
+        with open(ply_out_path, "rb") as f:
+            ply_bytes = f.read()
 
-    return result
+        ply_b64 = base64.b64encode(ply_bytes).decode("utf-8")
+
+        # Extract optional markers from stdout
+        stdout = result.stdout or ""
+
+        def extract_between(start: str, end: str):
+            if start in stdout and end in stdout:
+                a = stdout.find(start) + len(start)
+                b = stdout.find(end)
+                return stdout[a:b].strip()
+            return None
+
+        gif_b64 = extract_between("GIF_DATA_START", "GIF_DATA_END")
+        mesh_url = extract_between("MESH_URL_START", "MESH_URL_END")
+        ply_url = extract_between("PLY_URL_START", "PLY_URL_END")
+
+        return {
+            "success": True,
+            "seed": seed,
+            "ply_b64": ply_b64,
+            "ply_size_bytes": len(ply_bytes),
+            "gif_b64": gif_b64,       # optional
+            "mesh_url": mesh_url,     # optional (GLB saved in assets/)
+            "ply_url": ply_url,       # optional (PLY saved in assets/)
+            "debug_tail": stdout[-1500:],  # helpful during bring-up; remove once stable
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"error": "Timed out running SAM3D subprocess (over 15 minutes)."}
+    finally:
+        for p in [image_path, mask_path, ply_out_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
 
 runpod.serverless.start({"handler": handler})
