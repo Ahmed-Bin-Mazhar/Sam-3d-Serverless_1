@@ -82,6 +82,7 @@ RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir trimesh
 RUN mamba run -n sam3d-objects mamba install -y -c conda-forge open3d
 RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir timm
 RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir xatlas
+RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir astor
 
 
 # utils3d pin

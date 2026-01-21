@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import runpod
+import torch
+
+print("[handler] torch.cuda.is_available:", torch.cuda.is_available(), flush=True)
+if torch.cuda.is_available():
+    print("[handler] GPU:", torch.cuda.get_device_name(0), flush=True)
 
 
 # ----------------------------
