@@ -47,6 +47,9 @@ RUN rm -f /opt/conda/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_l
 # Upgrade packaging toolchain inside env
 RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel
 
+COPY requirements1.txt /workspace/requirements1.txt
+RUN pip install --no-cache-dir -r /workspace/requirements1.txt
+
 # ----------------------------
 # Hugging Face tooling (Option A runtime download needs this)
 # ----------------------------
