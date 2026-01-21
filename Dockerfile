@@ -55,9 +55,6 @@ RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir "huggingface
     mamba run -n sam3d-objects huggingface-cli --help >/dev/null
 
 
-RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir trimesh
-RUN mamba run -n sam3d-objects mamba install -y -c conda-forge open3d
-
 # ----------------------------
 # Install PyTorch CUDA 12.1
 # ----------------------------
@@ -79,6 +76,13 @@ RUN mamba run -n sam3d-objects python ./patching/hydra
 # ----------------------------
 RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir -e ".[inference]" || \
     mamba run -n sam3d-objects python -m pip install --no-cache-dir -e . --no-deps
+
+
+RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir trimesh
+RUN mamba run -n sam3d-objects mamba install -y -c conda-forge open3d
+RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir timm
+RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir xatlas
+
 
 # utils3d pin
 RUN mamba run -n sam3d-objects python -m pip uninstall -y utils3d || true && \
