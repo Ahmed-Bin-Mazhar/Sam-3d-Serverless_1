@@ -15,6 +15,7 @@ from typing import Dict, Any
 import runpod
 import torch
 from huggingface_hub import snapshot_download
+print("RUNPOD QUEUE WORKER BOOTING", flush=True)
 
 # -------------------------------------------------
 # Paths / env
@@ -195,21 +196,20 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------------------------------------
 # Start RunPod worker (and keep process alive)
 # -------------------------------------------------
-def main() -> None:
-    print("[SAM3D] Starting RunPod serverless listener...", flush=True)
+def main():
+    print("[BOOT] Starting RunPod queue worker", flush=True)
 
-    # If runpod returns immediately for any reason, we keep the process alive
-    # so the container doesn't instantly exit and get recycled.
-    try:
-        runpod.serverless.start({"handler": handler})
-    except Exception:
-        print("[SAM3D] runpod.serverless.start crashed:", flush=True)
-        traceback.print_exc()
+    runpod.serverless.start({
+        "handler": handler,
+        "return_aggregate_stream": False
+    })
 
-    print("[SAM3D] Listener returned. Keeping container alive (safety block).", flush=True)
+    # HARD BLOCK — RunPod sometimes kills otherwise
+    print("[BOOT] Worker started, entering hard block", flush=True)
     while True:
-        time.sleep(3600)
+        time.sleep(60)
 
 
 if __name__ == "__main__":
     main()
+
