@@ -11,4 +11,4 @@ scipy
 trimesh
 pygltflib
 kaolin
-pyvista     # optional but recommended
+pyvista     
