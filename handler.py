@@ -14,7 +14,10 @@ from huggingface_hub import snapshot_download
 import sys
 sys.path.append("/app/sam-3d-objects")
 
+import sys
+sys.path.insert(0, "/app/sam-3d-objects/notebook")
 from inference import Inference, load_image, load_single_mask
+
 
 
 # -------------------------------

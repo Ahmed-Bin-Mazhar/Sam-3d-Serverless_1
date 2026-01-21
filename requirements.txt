@@ -4,7 +4,7 @@ pydantic
 torch
 torchvision
 pillow
-numpy
+numpy==1.26.4
 transformers==4.57.3
 opencv-python
 scipy
