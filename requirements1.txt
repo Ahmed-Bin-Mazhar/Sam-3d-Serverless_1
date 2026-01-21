@@ -10,3 +10,5 @@ opencv-python
 scipy
 trimesh
 pygltflib
+kaolin
+pyvista     # optional but recommended
