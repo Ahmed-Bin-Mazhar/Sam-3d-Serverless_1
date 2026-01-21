@@ -12,3 +12,5 @@ trimesh
 pygltflib
 kaolin
 pyvista     
+omegaconf
+hydra-core

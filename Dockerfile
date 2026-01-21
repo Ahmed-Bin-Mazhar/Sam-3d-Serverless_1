@@ -64,7 +64,7 @@ WORKDIR /app/sam-3d-objects
 RUN pip install -e ".[inference]" \
  && pip install -e ".[p3d]" \
  && pip install -e ".[dev]" || true
-
+RUN pip install -r /app/sam-3d-objects/requirements.txt
 # NOTE: If any of these extras fail due to optional deps, you can remove "|| true"
 # and fix the missing dependency explicitly (recommended for production).
 ENV CONDA_PREFIX=/opt/conda
