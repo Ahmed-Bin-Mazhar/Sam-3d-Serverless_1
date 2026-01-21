@@ -119,4 +119,4 @@ RUN apt-get purge -y --auto-remove \
 # ----------------------------
 # RunPod Serverless entrypoint
 # ----------------------------
-CMD ["/workspace/mamba/envs/sam3d-objects/bin/python", "-u", "/workspace/sam-3d-objects/handler.py"]
+CMD ["/opt/conda/envs/sam3d-objects/bin/python", "-u", "/workspace/sam-3d-objects/handler.py"]
