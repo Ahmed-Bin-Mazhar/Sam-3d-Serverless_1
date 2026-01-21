@@ -1,48 +1,80 @@
+# Optimized RunPod Serverless Dockerfile for SAM-3D-Objects
+# - Uses a CUDA + PyTorch runtime base
+# - Installs only needed OS deps (incl. build tools for some CUDA/PyTorch extensions)
+# - Installs Python deps once (with Kaolin/NVIDIA indexes set *before* pip)
+# - Clones SAM-3D-Objects (optionally pinned to a commit/tag)
+# - Copies handler.py and starts RunPod serverless worker
+
 FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
 # ----------------------------
 # System dependencies
 # ----------------------------
-RUN apt-get update && apt-get install -y \
+# build-essential/cmake/ninja are often needed for pip packages that compile extensions (e.g., nvdiffrast / some 3D deps)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
+    ca-certificates \
     ffmpeg \
     libgl1 \
+    libglib2.0-0 \
+    build-essential \
+    cmake \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 # ----------------------------
-# Clone SAM-3D
+# Python packaging setup
 # ----------------------------
-RUN git clone https://github.com/facebookresearch/sam-3d-objects.git
+RUN python -m pip install --upgrade pip setuptools wheel
+
+# Kaolin / NVIDIA wheels (must be set BEFORE installing requirements)
+# Adjust these only if you intentionally use different torch/cuda versions.
+ENV PIP_EXTRA_INDEX_URL="https://pypi.nvidia.com" \
+    PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.1.0_cu121.html"
+
+# ----------------------------
+# Install Python dependencies
+# ----------------------------
+# Copy first to maximize layer caching when your code changes
+COPY requirements.txt /app/requirements.txt
+RUN pip install -r /app/requirements.txt
+
+# RunPod SDK + HuggingFace hub (explicit, since handler imports them)
+RUN pip install runpod huggingface-hub
+
+# ----------------------------
+# Get SAM-3D-Objects repo
+# ----------------------------
+# Optionally pin to a commit for reproducible builds:
+#   docker build --build-arg SAM3D_REF=<commit_or_tag> .
+ARG SAM3D_REPO="https://github.com/facebookresearch/sam-3d-objects.git"
+ARG SAM3D_REF="main"
+
+RUN git clone --depth 1 --branch "${SAM3D_REF}" "${SAM3D_REPO}" /app/sam-3d-objects
+
+# Install SAM-3D-Objects (extras used by your inference code)
 WORKDIR /app/sam-3d-objects
+RUN pip install -e ".[inference]" \
+ && pip install -e ".[p3d]" \
+ && pip install -e ".[dev]" || true
 
-COPY requirements.txt ./requirements.txt
+# NOTE: If any of these extras fail due to optional deps, you can remove "|| true"
+# and fix the missing dependency explicitly (recommended for production).
 
-# Upgrade pip and install dependencies
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-# ----------------------------
-# Python dependencies
-# ----------------------------
-ENV PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
-ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
-
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
-
-RUN pip install -e '.[dev]'
-RUN pip install -e '.[p3d]'
-RUN pip install -e '.[inference]'
-RUN pip install runpod huggingface-hub pillow
- 
 # ----------------------------
 # Copy handler
 # ----------------------------
+WORKDIR /app
 COPY handler.py /app/handler.py
 
-CMD ["python3", "-u","/app/handler.py"]
+# Helpful defaults for HF caching (your handler already defaults to /runpod-volume/sam3d/hf_cache)
+ENV HF_HOME=/runpod-volume/sam3d/hf_cache
 
-
+CMD ["python", "-u", "/app/handler.py"]
