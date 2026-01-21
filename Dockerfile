@@ -33,16 +33,10 @@ ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install -e '.[dev]' \
- && pip install -e '.[p3d]' \
- && pip install -e '.[inference]' \
- && pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation \
- && pip install runpod huggingface-hub pillow
-
-
- RUN pip install -e '.[dev]' \
- && pip install -e '.[p3d]' \
- && pip install -e '.[inference]'
+RUN pip install -e '.[dev]'
+RUN pip install -e '.[p3d]'
+RUN pip install -e '.[inference]'
+RUN pip install runpod huggingface-hub pillow
  
 # ----------------------------
 # Copy handler
