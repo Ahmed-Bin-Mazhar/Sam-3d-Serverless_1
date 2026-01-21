@@ -96,6 +96,7 @@ RUN mamba run -n sam3d-objects python -m pip uninstall -y utils3d || true && \
 RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir \
   timm astor easydict einops fvcore iopath yacs \
   scipy scikit-image imageio opencv-python-headless tqdm runpod numpy pillow
+RUN mamba run -n sam3d-objects python -m pip install --no-cache-dir spconv-cu121
 
 # Quick sanity check
 RUN mamba run -n sam3d-objects python -c "import torch; print('torch ok:', torch.__version__); import utils3d; print('utils3d ok')"
@@ -118,4 +119,4 @@ RUN apt-get purge -y --auto-remove \
 # ----------------------------
 # RunPod Serverless entrypoint
 # ----------------------------
-CMD ["/opt/conda/envs/sam3d-objects/bin/python", "-u", "/workspace/sam-3d-objects/handler.py"]
+CMD ["/workspace/mamba/envs/sam3d-objects/bin/python", "-u", "/workspace/sam-3d-objects/handler.py"]
