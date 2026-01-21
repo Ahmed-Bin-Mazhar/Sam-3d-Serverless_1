@@ -24,7 +24,7 @@ import runpod
 # ----------------------------
 REPO_ROOT = Path(__file__).resolve().parent  # /workspace/sam-3d-objects
 
-VOLUME_ROOT = Path("/runpod-volume/sam3d")
+VOLUME_ROOT = Path("/runpod-volume/sam3d-eu-cz-1")
 
 CHECKPOINTS_DIR = VOLUME_ROOT / "checkpoints" / "hf"
 PIPELINE_YAML = CHECKPOINTS_DIR / "pipeline.yaml"
