@@ -6,4 +6,3 @@ kaolin
 open3d
 opencv-python
 huggingface_hub
-pytorch3d
