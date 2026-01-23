@@ -21,16 +21,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Upgrade build tools
-RUN python -m pip install --upgrade pip setuptools wheel
+RUN python -m pip install --upgrade pip setuptools==69.5.1 wheel
 
 # Configure Pip to find the high-performance 3D libraries
 ENV PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu121 https://pypi.nvidia.com" \
     PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.1.0_cu121.html"
 
+
+RUN pip install runpod omegaconf hydra-core utils3d open3d
 # Install core project requirements
 # Ensure 'runpod', 'omegaconf', 'hydra-core', and 'utils3d' are in your requirements.txt
 COPY requirements.txt /app/requirements.txt
 RUN pip install -r /app/requirements.txt
+
+RUN pip install kaolin==0.15.0
+RUN pip install "git+https://github.com/facebookresearch/pytorch3d.git"
 
 # Clone and install SAM-3D
 RUN git clone --depth 1 https://github.com/facebookresearch/sam-3d-objects.git /app/sam-3d-objects
