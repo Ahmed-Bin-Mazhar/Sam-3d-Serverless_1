@@ -1,8 +1,8 @@
 import base64
 import os
 import sys
+import shutil
 import tempfile
-import time
 import traceback
 from typing import Dict, Any
 
@@ -11,192 +11,112 @@ import torch
 from huggingface_hub import snapshot_download
 
 # -------------------------------------------------
-# CRITICAL FIX: inference.py expects CONDA_PREFIX
+# 1. ENV & PATH SETUP
 # -------------------------------------------------
-os.environ.setdefault("CONDA_PREFIX", "/opt/conda")
+# satisfy inference.py's need for CONDA_PREFIX to find CUDA
+os.environ.setdefault("CONDA_PREFIX", "/usr/local/cuda")
+os.environ["LIDRA_SKIP_INIT"] = "true"
+
+# Add repo to path so imports like 'sam3d_objects' work
+sys.path.insert(0, "/app/sam-3d-objects")
+sys.path.insert(0, "/app/sam-3d-objects/notebook")
+
+from inference import Inference, load_image, load_single_mask
 
 # -------------------------------------------------
-# Paths / env
+# 2. STORAGE & CHECKPOINTS
 # -------------------------------------------------
 VOLUME_ROOT = "/runpod-volume/sam3d"
 CHECKPOINT_DIR = f"{VOLUME_ROOT}/checkpoints/hf"
 PIPELINE_YAML = f"{CHECKPOINT_DIR}/pipeline.yaml"
-HF_CACHE_DIR = f"{VOLUME_ROOT}/hf_cache"
 
-HF_TOKEN = os.environ.get("HF_TOKEN")
-HF_HOME = os.environ.get("HF_HOME", HF_CACHE_DIR)
-
-# -------------------------------------------------
-# Import SAM-3D inference code
-# -------------------------------------------------
-sys.path.insert(0, "/app/sam-3d-objects/notebook")
-from inference import Inference, load_image, load_single_mask  # noqa: E402
-
-# -------------------------------------------------
-# Checkpoints (cold start)
-# -------------------------------------------------
-def ensure_checkpoints() -> None:
-    """
-    Download HF model snapshot to CHECKPOINT_DIR on the network volume.
-    If PIPELINE_YAML exists, assume checkpoints are present.
-    """
-    if os.path.exists(PIPELINE_YAML):
-        print(f"[SAM3D] Checkpoints already present: {PIPELINE_YAML}", flush=True)
-        return
-
-    if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN environment variable is required to download checkpoints")
-
-    print("[SAM3D] Downloading checkpoints from Hugging Face...", flush=True)
-
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    os.makedirs(HF_CACHE_DIR, exist_ok=True)
-
-    snapshot_download(
-        repo_id="facebook/sam-3d-objects",
-        repo_type="model",
-        token=HF_TOKEN,
-        local_dir=CHECKPOINT_DIR,
-        local_dir_use_symlinks=False,
-        cache_dir=HF_HOME,
-        max_workers=1,
-    )
-
+def ensure_checkpoints():
     if not os.path.exists(PIPELINE_YAML):
-        raise RuntimeError(f"Checkpoint download finished but {PIPELINE_YAML} not found")
-
-    print("[SAM3D] Checkpoints downloaded and verified.", flush=True)
-
+        print("[SAM3D] Checkpoints missing. Downloading...", flush=True)
+        snapshot_download(
+            repo_id="facebook/sam-3d-objects",
+            local_dir=CHECKPOINT_DIR,
+            local_dir_use_symlinks=False,
+            token=os.environ.get("HF_TOKEN")
+        )
 
 # -------------------------------------------------
-# Model (warm start)
+# 3. WARM-UP (LOAD MODEL INTO GPU)
 # -------------------------------------------------
-print("[SAM3D] Worker boot: starting init...", flush=True)
 ensure_checkpoints()
-
-print("[SAM3D] Loading model...", flush=True)
 MODEL = Inference(PIPELINE_YAML, compile=False)
-MODEL.eval()
-
 if torch.cuda.is_available():
-    print(f"[SAM3D] CUDA available. Device: {torch.cuda.get_device_name(0)}", flush=True)
-else:
-    print("[SAM3D] WARNING: CUDA not available, running on CPU (will be very slow).", flush=True)
-
-print("[SAM3D] Model ready.", flush=True)
-
+    MODEL._pipeline.to("cuda")
 
 # -------------------------------------------------
-# Helpers: base64 <-> temp files
+# 4. BASE64 TO 3D LOGIC
 # -------------------------------------------------
-def b64_to_file(b64: str, suffix: str) -> str:
+def run_inference(image_b64: str, mask_b64: str, seed: int):
+    # Create unique temp workspace for this API call
+    tmp_dir = tempfile.mkdtemp()
     try:
-        data = base64.b64decode(b64, validate=True)
-    except Exception:
-        # Some clients send base64 without padding; try forgiving decode
-        data = base64.b64decode(b64)
+        # 1. Define internal paths
+        img_path = os.path.join(tmp_dir, "input.png")
+        mask_dir = os.path.join(tmp_dir, "masks")
+        os.makedirs(mask_dir, exist_ok=True)
+        mask_file = os.path.join(mask_dir, "0.png") # SAM3D looks for 0.png
+        out_ply = os.path.join(tmp_dir, "result.ply")
 
-    fd, path = tempfile.mkstemp(suffix=suffix)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-    return path
+        # 2. Clean Base64 (remove headers if present)
+        def clean_b64(data):
+            if isinstance(data, str) and "," in data:
+                return data.split(",")[1]
+            return data
 
+        # 3. Save Base64 strings to temporary files
+        with open(img_path, "wb") as f:
+            f.write(base64.b64decode(clean_b64(image_b64)))
+        with open(mask_file, "wb") as f:
+            f.write(base64.b64decode(clean_b64(mask_b64)))
 
-def file_to_b64(path: str) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-# -------------------------------------------------
-# Inference core
-# -------------------------------------------------
-def run_sam3d(image_b64: str, mask_b64: str, seed: int) -> str:
-    image_path = mask_path = out_ply = None
-    try:
-        image_path = b64_to_file(image_b64, ".png")
-        mask_path = b64_to_file(mask_b64, ".png")
-        out_ply = tempfile.mktemp(suffix=".ply")
-
-        image = load_image(image_path)
-        mask = load_single_mask(mask_path)
-
-        if image is None or mask is None:
-            raise ValueError("Invalid image or mask (failed to load PNG)")
+        # 4. Execute SAM-3D logic
+        image_np = load_image(img_path)
+        mask_np = load_single_mask(mask_dir)
 
         with torch.no_grad():
-            output = MODEL(image, mask, seed=seed)
+            output = MODEL(image_np, mask_np, seed=seed)
 
-        if "gs" not in output:
-            raise RuntimeError("Model output missing 'gs' object; cannot save ply")
-
-        output["gs"].save_ply(out_ply)
-        return file_to_b64(out_ply)
+        # 5. Export Result
+        if "gs" in output:
+            output["gs"].save_ply(out_ply)
+            with open(out_ply, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+        else:
+            raise RuntimeError("Model did not return 'gs' object.")
 
     finally:
-        for p in (image_path, mask_path, out_ply):
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
-
+        # Delete all temp files to keep the container slim
+        shutil.rmtree(tmp_dir)
 
 # -------------------------------------------------
-# RunPod handler
+# 5. RUNPOD API HANDLER
 # -------------------------------------------------
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        inp = job.get("input", {}) or {}
+        # Extract data from the API request
+        payload = job.get("input", {})
+        img_b64 = payload.get("imageBase64")
+        msk_b64 = payload.get("maskBase64")
+        seed = int(payload.get("seed", 42))
 
-        image_b64 = inp.get("imageBase64")
-        mask_b64 = inp.get("maskBase64")
-        options = inp.get("options", {}) or {}
+        if not img_b64 or not msk_b64:
+            return {"status": "error", "message": "Missing image or mask base64"}
 
-        seed = int(options.get("seed", 42))
-        outputs = options.get("output", ["ply"])
+        # Run the 3D reconstruction
+        ply_result = run_inference(img_b64, msk_b64, seed)
 
-        if not image_b64 or not mask_b64:
-            return {"success": False, "error": "imageBase64 and maskBase64 are required"}
-
-        # Allow outputs to be a string or list
-        if isinstance(outputs, str):
-            outputs = [outputs]
-
-        if "ply" not in outputs:
-            return {"success": False, "error": "Only 'ply' output is supported"}
-
-        ply_b64 = run_sam3d(image_b64, mask_b64, seed)
-        return {"success": True, "plyBase64": ply_b64}
-
-    except torch.cuda.OutOfMemoryError:
-        try:
-            torch.cuda.empty_cache()
-        except Exception:
-            pass
-        return {"success": False, "error": "CUDA out of memory"}
+        return {
+            "status": "success",
+            "ply_base64": ply_result
+        }
 
     except Exception as e:
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
-
-
-# -------------------------------------------------
-# Start RunPod worker (and keep process alive)
-# -------------------------------------------------
-def main():
-    print("[BOOT] Starting RunPod queue worker", flush=True)
-
-    runpod.serverless.start({
-        "handler": handler,
-        "return_aggregate_stream": False
-    })
-
-    # HARD BLOCK — RunPod sometimes kills otherwise
-    print("[BOOT] Worker started, entering hard block", flush=True)
-    while True:
-        time.sleep(60)
-
+        return {"status": "error", "message": str(e), "trace": traceback.format_exc()}
 
 if __name__ == "__main__":
-    main()
-
+    runpod.serverless.start({"handler": handler})
