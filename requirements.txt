@@ -1,8 +1,0 @@
-runpod
-omegaconf
-hydra-core
-utils3d
-kaolin
-open3d
-opencv-python
-huggingface_hub
