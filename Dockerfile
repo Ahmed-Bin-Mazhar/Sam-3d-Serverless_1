@@ -50,7 +50,7 @@ RUN set -eux; \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir \
-    loguru seaborn
+    loguru timm 
 
 # ----------------------------
 # Install torch + cuda + pytorch3d (prebuilt)
