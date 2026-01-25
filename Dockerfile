@@ -37,30 +37,13 @@ RUN git clone https://github.com/bilalfawadkhan/sam-3d-objects.git /workspace/sa
 WORKDIR /workspace/sam-3d-objects
 
 # ----------------------------
-# Create ONE env (name matches /envs/sam3d-objects in your logs)
+# Create env
 # ----------------------------
 RUN set -eux; \
-    mamba create -y -n sam3d-objects python=3.10 pip; \
-    mamba clean -a -y
+    mamba env create -f environments/default.yml
 
 # ----------------------------
-# Install PyTorch CUDA 12.1
-# ----------------------------
-RUN set -eux; \
-    mamba install -y -n sam3d-objects -c pytorch -c nvidia \
-      pytorch torchvision pytorch-cuda=12.1; \
-    mamba clean -a -y
-
-# ----------------------------
-# Install PyTorch3D (conda)
-# ----------------------------
-RUN set -eux; \
-    mamba install -y -n sam3d-objects -c pytorch3d -c pytorch -c nvidia -c conda-forge \
-      pytorch3d; \
-    mamba clean -a -y
-
-# ----------------------------
-# Avoid NumPy 2.x ABI issues
+# IMPORTANT: avoid NumPy 2.x ABI issues
 # ----------------------------
 RUN set -eux; \
     mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel; \
@@ -70,23 +53,30 @@ RUN mamba run -n sam3d-objects pip install --no-cache-dir \
     loguru seaborn
 
 # ----------------------------
-# Missing runtime deps seen in your errors
+# Install torch + cuda + pytorch3d (prebuilt)
 # ----------------------------
 RUN set -eux; \
-    mamba run -n sam3d-objects pip install --no-cache-dir \
-      loguru timm
+    mamba run -n sam3d-objects mamba install -y \
+      -c pytorch -c nvidia -c conda-forge \
+      pytorch torchvision pytorch-cuda=12.1
 
-# ----------------------------
-# Hydra fix / patch support (keep if your repo needs it)
-# ----------------------------
+RUN set -eux; \
+    mamba run -n sam3d-objects mamba install -y \
+      -c pytorch3d -c pytorch -c nvidia -c conda-forge \
+      pytorch3d
+
+# Some environments bring a binutils activation script that can break in minimal images
+RUN rm -f /workspace/mamba/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_linux-64.sh 2>/dev/null || true
+
+# hydra fix / patch support
 RUN set -eux; \
     mamba run -n sam3d-objects pip install --no-cache-dir "hydra-core>=1.3,<1.4"
 
 # ----------------------------
-# Install repo + inference extras (DO ONCE)
+# Install SAM3D repo WITHOUT letting pip pull deps again
 # ----------------------------
 RUN set -eux; \
-    mamba run -n sam3d-objects pip install --no-cache-dir -e ".[inference]"
+    mamba run -n sam3d-objects pip install --no-cache-dir -e . --no-deps
 
 # Apply patch (use python to avoid exec permission issues)
 RUN set -eux; \
@@ -111,8 +101,9 @@ RUN set -eux; \
 # Quick sanity check
 RUN set -eux; \
     mamba run -n sam3d-objects python - <<'PY'
-import torch, numpy
+import torch, pytorch3d, numpy
 print("torch:", torch.__version__, "cuda:", torch.version.cuda, "cuda_available:", torch.cuda.is_available())
+print("pytorch3d:", pytorch3d.__version__)
 print("numpy:", numpy.__version__)
 PY
 
