@@ -45,12 +45,11 @@ RUN set -eux; \
 # ----------------------------
 # IMPORTANT: avoid NumPy 2.x ABI issues
 # ----------------------------
-RUN set -eux; \
-    mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel; \
+RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel; \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir \
-    loguru timm 
+    loguru seaborn
 
 # ----------------------------
 # Install torch + cuda + pytorch3d (prebuilt)
