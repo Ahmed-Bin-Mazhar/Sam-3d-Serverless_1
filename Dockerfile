@@ -49,7 +49,7 @@ RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wh
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir \
-    loguru seaborn timm
+    loguru seaborn
 
 # ----------------------------
 # Install torch + cuda + pytorch3d (prebuilt)
@@ -88,6 +88,7 @@ RUN set -eux; \
     mamba run -n sam3d-objects pip uninstall -y utils3d || true; \
     mamba run -n sam3d-objects pip install --no-cache-dir \
       "git+https://github.com/EasternJournalist/utils3d.git@c5daf6f6c244d251f252102d09e9b7bcef791a38"
+RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
 
 # ----------------------------
 # Runtime deps + RunPod SDK + HF client
