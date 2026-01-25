@@ -1,58 +1,121 @@
-# RunPod GPU base image (includes CUDA + common tooling)
-FROM runpod/base:0.6.2-cuda12.1.0
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
-SHELL ["/bin/bash", "-lc"]
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /workspace
+SHELL ["/bin/bash", "-lc"]
 
-# --- OS deps ---
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git wget curl ca-certificates \
-    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
-    && rm -rf /var/lib/apt/lists/*
+# ----------------------------
+# System deps
+# ----------------------------
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      bash ca-certificates \
+      git wget curl \
+      build-essential cmake \
+      libgl1 libglib2.0-0 libsm6 libxext6 libxrender1; \
+    rm -rf /var/lib/apt/lists/*
 
-# --- Miniforge / Mamba ---
-# Install into /opt/conda (typical) and expose on PATH
-RUN wget -q "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh" \
-    -O /tmp/Miniforge3-Linux-x86_64.sh && \
-    bash /tmp/Miniforge3-Linux-x86_64.sh -b -p /opt/conda && \
+# ----------------------------
+# Miniforge (mamba)
+# ----------------------------
+RUN set -eux; \
+    wget -q "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh" \
+      -O /tmp/Miniforge3-Linux-x86_64.sh; \
+    bash /tmp/Miniforge3-Linux-x86_64.sh -b -p /workspace/mamba; \
     rm -f /tmp/Miniforge3-Linux-x86_64.sh
 
-ENV PATH="/opt/conda/bin:${PATH}"
+ENV PATH=/workspace/mamba/bin:$PATH
+ENV CONDA_AUTO_ACTIVATE_BASE=false
 
-# (Optional) speed / reliability for conda
-RUN conda config --set channel_priority strict && \
-    conda config --add channels conda-forge
-
-# --- Get SAM 3D Objects code ---
-RUN git clone https://github.com/facebookresearch/sam-3d-objects.git /workspace/sam-3d-objects
+# ----------------------------
+# Clone repo
+# ----------------------------
+RUN git clone https://github.com/bilalfawadkhan/sam-3d-objects.git /workspace/sam-3d-objects
 WORKDIR /workspace/sam-3d-objects
 
-# --- Create env from repo YAML ---
-# This is your step 8–9 (but done in build).
-RUN mamba env create -f environments/default.yml
+# ----------------------------
+# Create env
+# ----------------------------
+RUN set -eux; \
+    mamba env create -f environments/default.yml
 
-# Your pip index settings (steps 10 + 13)
-# Keep them as ENV so pip inside env sees them.
-ENV PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
-ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
+# ----------------------------
+# IMPORTANT: avoid NumPy 2.x ABI issues
+# ----------------------------
+RUN set -eux; \
+    mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel; \
+    mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
-# --- Install extras (steps 11,12,14) + hydra patch (step 15) ---
-# Use mamba run so we don't need "mamba activate" in Docker build layers.
-RUN mamba run -n sam3d-objects pip install --no-cache-dir -e ".[dev]" && \
-    mamba run -n sam3d-objects pip install --no-cache-dir -e ".[p3d]" && \
-    mamba run -n sam3d-objects pip install --no-cache-dir -e ".[inference]" && \
-    ./patching/hydra
+# ----------------------------
+# Install torch + cuda + pytorch3d (prebuilt)
+# ----------------------------
+RUN set -eux; \
+    mamba run -n sam3d-objects mamba install -y \
+      -c pytorch -c nvidia -c conda-forge \
+      pytorch torchvision pytorch-cuda=12.1
 
-# --- Hugging Face CLI lib (your step 16) ---
-RUN mamba run -n sam3d-objects pip install --no-cache-dir "huggingface-hub[cli]<1.0"
+RUN set -eux; \
+    mamba run -n sam3d-objects mamba install -y \
+      -c pytorch3d -c pytorch -c nvidia -c conda-forge \
+      pytorch3d
 
-# --- RunPod SDK (required for serverless handler) ---
-RUN mamba run -n sam3d-objects pip install --no-cache-dir runpod
+# Some environments bring a binutils activation script that can break in minimal images
+RUN rm -f /workspace/mamba/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_linux-64.sh 2>/dev/null || true
 
-# Copy handler into image
-WORKDIR /workspace
-COPY handler.py /workspace/handler.py
+# hydra fix / patch support
+RUN set -eux; \
+    mamba run -n sam3d-objects pip install --no-cache-dir "hydra-core>=1.3,<1.4"
 
-# Start the serverless worker
-CMD ["bash", "-lc", "mamba run -n sam3d-objects python -u /workspace/handler.py"]
+# ----------------------------
+# Install SAM3D repo WITHOUT letting pip pull deps again
+# ----------------------------
+RUN set -eux; \
+    mamba run -n sam3d-objects pip install --no-cache-dir -e . --no-deps
+
+# Apply patch (use python to avoid exec permission issues)
+RUN set -eux; \
+    mamba run -n sam3d-objects python ./patching/hydra
+
+# ----------------------------
+# utils3d pin (your known-good)
+# ----------------------------
+RUN set -eux; \
+    mamba run -n sam3d-objects pip uninstall -y utils3d || true; \
+    mamba run -n sam3d-objects pip install --no-cache-dir \
+      "git+https://github.com/EasternJournalist/utils3d.git@c5daf6f6c244d251f252102d09e9b7bcef791a38"
+
+# ----------------------------
+# Runtime deps + RunPod SDK + HF client
+# ----------------------------
+RUN set -eux; \
+    mamba run -n sam3d-objects pip install --no-cache-dir \
+      runpod pillow opencv-python-headless imageio tqdm \
+      "huggingface-hub[cli]<1.0"
+
+# Quick sanity check
+RUN set -eux; \
+    mamba run -n sam3d-objects python - <<'PY'
+import torch, pytorch3d, numpy
+print("torch:", torch.__version__, "cuda:", torch.version.cuda, "cuda_available:", torch.cuda.is_available())
+print("pytorch3d:", pytorch3d.__version__)
+print("numpy:", numpy.__version__)
+PY
+
+# ----------------------------
+# Cleanup (optional)
+# ----------------------------
+RUN set -eux; \
+    apt-get purge -y --auto-remove build-essential cmake; \
+    rm -rf /var/lib/apt/lists/*; \
+    mamba clean -a -y; \
+    rm -rf /workspace/mamba/pkgs
+
+# ----------------------------
+# Copy handler
+# ----------------------------
+COPY handler.py /workspace/sam-3d-objects/handler.py
+
+CMD ["/workspace/mamba/envs/sam3d-objects/bin/python", "-u", "/workspace/sam-3d-objects/handler.py"]
