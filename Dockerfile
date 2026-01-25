@@ -49,6 +49,9 @@ RUN set -eux; \
     mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel; \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
+RUN mamba run -n sam3d-objects pip install --no-cache-dir \
+    loguru seaborn timm
+
 # ----------------------------
 # Install torch + cuda + pytorch3d (prebuilt)
 # ----------------------------
@@ -74,6 +77,7 @@ RUN set -eux; \
 # ----------------------------
 RUN set -eux; \
     mamba run -n sam3d-objects pip install --no-cache-dir -e . --no-deps
+RUN mamba run -n sam3d-objects pip install --no-cache-dir -e ".[inference]"
 
 # Apply patch (use python to avoid exec permission issues)
 RUN set -eux; \
