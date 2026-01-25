@@ -66,6 +66,9 @@ RUN set -eux; \
     mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel; \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
+RUN mamba run -n sam3d-objects pip install --no-cache-dir \
+    loguru seaborn
+
 # ----------------------------
 # Missing runtime deps seen in your errors
 # ----------------------------
