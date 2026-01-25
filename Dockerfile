@@ -88,6 +88,12 @@ RUN set -eux; \
     mamba run -n sam3d-objects pip uninstall -y utils3d || true; \
     mamba run -n sam3d-objects pip install --no-cache-dir \
       "git+https://github.com/EasternJournalist/utils3d.git@c5daf6f6c244d251f252102d09e9b7bcef791a38"
+
+
+RUN mamba run -n sam3d-objects pip install --no-cache-dir open3d==0.18.0
+RUN mamba run -n sam3d-objects pip install --no-cache-dir kaolin==0.17.0
+RUN mamba run -n sam3d-objects pip install --no-cache-dir gradio==5.49.0
+RUN mamba run -n sam3d-objects pip install --no-cache-dir   git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7
 RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
 
 # ----------------------------
