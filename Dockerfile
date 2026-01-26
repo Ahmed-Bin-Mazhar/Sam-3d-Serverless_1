@@ -70,7 +70,9 @@ RUN mamba run -n sam3d-objects pip install --no-cache-dir kaolin==0.17.0
 
 RUN mamba run -n sam3d-objects python -c "import torch, sys, pytorch3d; print('torch cuda:', torch.version.cuda, 'torch:', torch.__version__ , 'pytorch3d:', pytorch3d.__version__)"
 
-RUN mamba run -n sam3d-objects pip install --no-cache-dir git+https://github.com/nerfstudio-project/gsplat.git
+RUN mamba run -n sam3d-objects pip install --no-cache-dir \
+  "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
+
 
 
 RUN set -eux; \
