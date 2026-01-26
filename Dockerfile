@@ -4,7 +4,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 # CUDA paths (helps torch extensions like gsplat find CUDA)
-ENV CUDA_HOME=/usr/local/cuda-12.1
+# NOTE: on this image, /usr/local/cuda is usually a symlink to /usr/local/cuda-12.1
+ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
@@ -96,39 +97,38 @@ RUN set -eux; \
 # Build helpers for CUDA extensions (inside env, optional but safe)
 # ----------------------------
 RUN set -eux; \
-    mamba run -n sam3d-objects mamba install -y -c conda-forge ninja cmake gcc_linux-64 gxx_linux-64
+    mamba run -n sam3d-objects mamba install -y -c conda-forge \
+      ninja cmake gcc_linux-64 gxx_linux-64
 
 # ----------------------------
-# gsplat (needs torch visible + CUDA_HOME -> disable build isolation)
+# gsplat (clone + local install)
 # ----------------------------
 RUN set -eux; \
-    mamba run -n sam3d-objects pip uninstall -y torch torchvision torchaudio || true; \
-    mamba run -n sam3d-objects mamba install -y -c pytorch -c nvidia \
-      pytorch=2.5.1 torchvision=0.20.1 torchaudio=2.5.1 pytorch-cuda=12.1
-
-# ---- gsplat (clone + local install to avoid metadata-generation issues) ----
-# ---- gsplat (clone + local install) ----
-RUN set -eux; \
-  echo "CUDA_HOME=$CUDA_HOME"; \
-  ls -la /usr/local/cuda; \
-  ls -la /usr/local/cuda/lib64 || true; \
-  ls -la /usr/local/cuda/include || true; \
-  which nvcc || true; \
-  nvcc --version || true; \
-  mamba run -n sam3d-objects python - <<'PY'
-        import os, torch
-        print("CUDA_HOME env:", os.environ.get("CUDA_HOME"))
-        print("torch:", torch.__version__)
-        print("torch.version.cuda:", torch.version.cuda)
-    PY
-
-env CUDA_HOME=/usr/local/cuda-12.1 \
-    PATH="/usr/local/cuda-12.1/bin:$PATH" \
-    LD_LIBRARY_PATH="/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH" \
-    TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0" \
-    mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation -e . \
+    # prove CUDA is visible
+    echo "CUDA_HOME=$CUDA_HOME"; \
+    ls -la "$CUDA_HOME"; \
+    ls -la "$CUDA_HOME/lib64" || true; \
+    ls -la "$CUDA_HOME/include" || true; \
+    which nvcc; \
+    nvcc --version; \
+    # ensure torch is still CUDA build
+    mamba run -n sam3d-objects python - <<'PY'
+import os, torch
+print("CUDA_HOME env:", os.environ.get("CUDA_HOME"))
+print("torch:", torch.__version__)
+print("torch.version.cuda:", torch.version.cuda)
+PY
+    rm -rf /tmp/gsplat; \
+    git clone --recursive https://github.com/nerfstudio-project/gsplat.git /tmp/gsplat; \
+    cd /tmp/gsplat; \
+    git checkout 2323de5905d5e90e035f792fe65bad0fedd413e7; \
+    git submodule update --init --recursive; \
+    env CUDA_HOME="$CUDA_HOME" \
+        PATH="$CUDA_HOME/bin:$PATH" \
+        LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH" \
+        TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0" \
+      mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation -e .; \
     rm -rf /tmp/gsplat
-
 
 # ----------------------------
 # utils3d pinned fork
@@ -159,11 +159,11 @@ RUN set -eux; \
       runpod pillow opencv-python-headless imageio tqdm \
       "huggingface-hub[cli]<1.0"
 
-# Final sanity
+# Final sanity (cuda_available may be False during docker build; that's OK)
 RUN set -eux; \
     mamba run -n sam3d-objects python - <<'PY'
 import torch, pytorch3d, numpy
-print("torch:", torch.__version__, "torch.version.cuda:", torch.version.cuda)
+print("torch:", torch.__version__, "torch.version.cuda:", torch.version.cuda, "cuda_available:", torch.cuda.is_available())
 print("pytorch3d:", pytorch3d.__version__)
 print("numpy:", numpy.__version__)
 PY
