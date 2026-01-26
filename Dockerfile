@@ -42,52 +42,24 @@ WORKDIR /workspace/sam-3d-objects
 RUN set -eux; \
     mamba env create -f environments/default.yml
 
-# ----------------------------
-# IMPORTANT: avoid NumPy 2.x ABI issues
-# ----------------------------
-RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel; \
+# Installing PyTorch & Dependencies (pip indexes)
+ENV PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
+ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
+
+RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel && \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir \
     loguru seaborn
 
-# ---- install torch (MUST come first) ----
-# upgrade pip & build tools
-RUN pip install --upgrade pip setuptools wheel
+RUN mamba run -n sam3d-objects pip install -e ".[dev]" && \
+    mamba run -n sam3d-objects pip install -e ".[p3d]"
 
-# install torch first
-RUN pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
-    --extra-index-url https://download.pytorch.org/whl/cu121
+RUN mamba run -n sam3d-objects python -c "import torch, pytorch3d; print('cuda:', torch.version.cuda, 'avail:', torch.cuda.is_available())"
 
-# install pytorch3d using official wheel
-RUN pip install pytorch3d==0.7.8 \
-    -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py311_cu121_pyt251/download.html
-
-# sanity check
-RUN python -c "import torch; import pytorch3d; print(torch.cuda.is_available())"
-
-# install gsplat
-RUN pip install git+https://github.com/nerfstudio-project/gsplat.git
+RUN mamba run -n sam3d-objects pip install --no-cache-dir git+https://github.com/nerfstudio-project/gsplat.git
 
 
-# Some environments bring a binutils activation script that can break in minimal images
-RUN rm -f /workspace/mamba/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_linux-64.sh 2>/dev/null || true
-
-# hydra fix / patch support
-RUN set -eux; \
-    mamba run -n sam3d-objects pip install --no-cache-dir "hydra-core>=1.3,<1.4"
-
-# ----------------------------
-# Install SAM3D repo WITHOUT letting pip pull deps again
-# ----------------------------
-RUN set -eux; \
-    mamba run -n sam3d-objects pip install --no-cache-dir -e . --no-deps
-
-RUN PIP_FIND_LINKS=https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html
-
-# ----------------------------
-# utils3d pin (your known-good)
-# ----------------------------
 RUN set -eux; \
     mamba run -n sam3d-objects pip uninstall -y utils3d || true; \
     mamba run -n sam3d-objects pip install --no-cache-dir \
@@ -96,12 +68,10 @@ RUN set -eux; \
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir open3d==0.18.0
 RUN mamba run -n sam3d-objects pip install --no-cache-dir gradio==5.49.0
-# system deps
-RUN apt-get update && apt-get install -y \
-    git build-essential cmake ninja-build \
-    && rm -rf /var/lib/apt/lists/*
 
-# upgrade build tooling
+# Some environments bring a binutils activation script that can break in minimal images
+RUN rm -f /workspace/mamba/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_linux-64.sh 2>/dev/null || true
+
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
 
