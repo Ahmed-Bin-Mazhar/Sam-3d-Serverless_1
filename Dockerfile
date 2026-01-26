@@ -43,37 +43,32 @@ RUN set -eux; \
     mamba env create -f environments/default.yml
 
 
-# Installing PyTorch & Dependencies (pip indexes)
+# pip indexes (optional, fine to keep)
 ENV PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
 ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
 
+# Install CUDA torch + pytorch3d via conda
+RUN mamba run -n sam3d-objects mamba install -y -c pytorch -c nvidia \
+    pytorch=2.5.1 torchvision=0.20.1 torchaudio=2.5.1 pytorch-cuda=12.1
 
 RUN mamba run -n sam3d-objects mamba install -y \
-    -c pytorch -c nvidia \
-    pytorch torchvision torchaudio pytorch-cuda=12.1
-
-    RUN mamba run -n sam3d-objects mamba install -y \
     -c pytorch3d -c pytorch -c nvidia -c conda-forge \
     pytorch3d
 
+# pin numpy + tooling
 RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel && \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
-RUN mamba run -n sam3d-objects pip install --no-cache-dir \
-    loguru seaborn
-
-
+# your editable installs (no deps)
 RUN mamba run -n sam3d-objects pip install -e ".[dev]" --no-deps && \
     mamba run -n sam3d-objects pip install -e ".[p3d]" --no-deps
 
-RUN mamba run -n sam3d-objects pip install --no-cache-dir kaolin==0.17.0
+# sanity
+RUN mamba run -n sam3d-objects python -c "import torch, pytorch3d; print('torch:', torch.__version__, 'cuda:', torch.version.cuda, 'p3d:', pytorch3d.__version__)"
 
-RUN mamba run -n sam3d-objects python -c "import torch, sys, pytorch3d; print('torch cuda:', torch.version.cuda, 'torch:', torch.__version__ , 'pytorch3d:', pytorch3d.__version__)"
-
-RUN mamba run -n sam3d-objects pip install --no-cache-dir \
+# gsplat needs torch visible during build -> disable build isolation
+RUN mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation \
   "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
-
-
 
 RUN set -eux; \
     mamba run -n sam3d-objects pip uninstall -y utils3d || true; \
