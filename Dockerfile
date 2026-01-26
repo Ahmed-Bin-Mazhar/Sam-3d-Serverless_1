@@ -12,6 +12,7 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 WORKDIR /workspace
 SHELL ["/bin/bash", "-lc"]
 
+
 # ----------------------------
 # System deps
 # ----------------------------
@@ -100,24 +101,16 @@ RUN set -eux; \
     mamba run -n sam3d-objects mamba install -y -c conda-forge \
       ninja cmake gcc_linux-64 gxx_linux-64
 
-# ----------------------------
-# gsplat (clone + local install)
-# ----------------------------
+# Sanity: show what CUDA/torch look like inside the env
 RUN set -eux; \
-    # prove CUDA is visible
     echo "CUDA_HOME=$CUDA_HOME"; \
     ls -la "$CUDA_HOME"; \
-    ls -la "$CUDA_HOME/lib64" || true; \
-    ls -la "$CUDA_HOME/include" || true; \
     which nvcc; \
     nvcc --version; \
-    # ensure torch is still CUDA build
-    mamba run -n sam3d-objects python - <<'PY'
-import os, torch
-print("CUDA_HOME env:", os.environ.get("CUDA_HOME"))
-print("torch:", torch.__version__)
-print("torch.version.cuda:", torch.version.cuda)
-PY
+    mamba run -n sam3d-objects python -c "import os, torch; print('CUDA_HOME:', os.environ.get('CUDA_HOME')); print('torch:', torch.__version__); print('torch.version.cuda:', torch.version.cuda)"
+
+# gsplat (clone + install)
+RUN set -eux; \
     rm -rf /tmp/gsplat; \
     git clone --recursive https://github.com/nerfstudio-project/gsplat.git /tmp/gsplat; \
     cd /tmp/gsplat; \
