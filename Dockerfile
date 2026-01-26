@@ -33,7 +33,7 @@ ENV CONDA_AUTO_ACTIVATE_BASE=false
 # ----------------------------
 # Clone repo
 # ----------------------------
-RUN git clone https://github.com/bilalfawadkhan/sam-3d-objects.git /workspace/sam-3d-objects
+RUN git clone https://github.com/facebookresearch/sam-3d-objects.git /workspace/sam-3d-objects
 WORKDIR /workspace/sam-3d-objects
 
 # ----------------------------
