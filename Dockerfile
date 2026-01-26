@@ -41,7 +41,7 @@ WORKDIR /workspace/sam-3d-objects
 # ----------------------------
 RUN set -eux; \
     mamba env create -f environments/default.yml
-mamba activate sam3d-objects
+
 # ----------------------------
 # IMPORTANT: avoid NumPy 2.x ABI issues
 # ----------------------------
