@@ -57,7 +57,7 @@ RUN mamba run -n sam3d-objects pip install -e ".[dev]" --no-deps && \
 
 
 
-RUN mamba run -n sam3d-objects python -c "import torch, pytorch3d; print('cuda:', torch.version.cuda, 'avail:', torch.cuda.is_available())"
+RUN mamba run -n sam3d-objects python -c "import torch, sys, pytorch3d; print('torch cuda:', torch.version.cuda, 'torch:', torch.__version__ , 'pytorch3d:', pytorch3d.__version__)"
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir git+https://github.com/nerfstudio-project/gsplat.git
 
