@@ -52,8 +52,11 @@ RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wh
 RUN mamba run -n sam3d-objects pip install --no-cache-dir \
     loguru seaborn
 
+RUN mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation --no-use-pep517 "nvidia-pyindex==1.0.9"
+
 RUN mamba run -n sam3d-objects pip install -e ".[dev]" && \
     mamba run -n sam3d-objects pip install -e ".[p3d]"
+
 
 RUN mamba run -n sam3d-objects python -c "import torch, pytorch3d; print('cuda:', torch.version.cuda, 'avail:', torch.cuda.is_available())"
 
