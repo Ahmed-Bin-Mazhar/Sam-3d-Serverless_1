@@ -102,10 +102,21 @@ RUN set -eux; \
 # gsplat (needs torch visible + CUDA_HOME -> disable build isolation)
 # ----------------------------
 RUN set -eux; \
+    mamba run -n sam3d-objects pip uninstall -y torch torchvision torchaudio || true; \
+    mamba run -n sam3d-objects mamba install -y -c pytorch -c nvidia \
+      pytorch=2.5.1 torchvision=0.20.1 torchaudio=2.5.1 pytorch-cuda=12.1
+
+# ---- gsplat (clone + local install to avoid metadata-generation issues) ----
+RUN set -eux; \
+    rm -rf /tmp/gsplat; \
+    git clone --recursive https://github.com/nerfstudio-project/gsplat.git /tmp/gsplat; \
+    cd /tmp/gsplat; \
+    git checkout 2323de5905d5e90e035f792fe65bad0fedd413e7; \
+    git submodule update --init --recursive; \
     CUDA_HOME=/usr/local/cuda \
     TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0" \
-    mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation \
-      "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
+    mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation -e .; \
+    rm -rf /tmp/gsplat
 
 # ----------------------------
 # utils3d pinned fork
