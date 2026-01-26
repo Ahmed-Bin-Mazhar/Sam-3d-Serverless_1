@@ -90,7 +90,13 @@ RUN set -eux; \
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir open3d==0.18.0
 RUN mamba run -n sam3d-objects pip install --no-cache-dir gradio==5.49.0
-RUN mamba run -n sam3d-objects pip install --no-cache-dir   git+https://github.com/nerfstudio-project/gsplat.git
+# system deps
+RUN apt-get update && apt-get install -y \
+    git build-essential cmake ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# upgrade build tooling
+RUN mamba run -n sam3d-objects python -m pip install -U pip setuptools wheel
 RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
 
 
