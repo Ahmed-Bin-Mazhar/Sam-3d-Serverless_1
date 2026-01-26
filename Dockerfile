@@ -102,6 +102,8 @@ RUN set -eux; \
 # gsplat (needs torch visible + CUDA_HOME -> disable build isolation)
 # ----------------------------
 RUN set -eux; \
+    CUDA_HOME=/usr/local/cuda \
+    TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0" \
     mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation \
       "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
 
