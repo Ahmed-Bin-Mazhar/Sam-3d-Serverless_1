@@ -77,8 +77,7 @@ RUN set -eux; \
 RUN set -eux; \
     mamba run -n sam3d-objects pip install --no-cache-dir -e . --no-deps
 
-RUN PIP_FIND_LINKS=https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html \
-    pip install -e '.[inference]'
+RUN PIP_FIND_LINKS=https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html
 
 # ----------------------------
 # utils3d pin (your known-good)
