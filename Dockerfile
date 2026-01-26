@@ -90,7 +90,7 @@ RUN set -eux; \
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir open3d==0.18.0
 RUN mamba run -n sam3d-objects pip install --no-cache-dir gradio==5.49.0
-RUN mamba run -n sam3d-objects pip install --no-cache-dir   git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7
+RUN mamba run -n sam3d-objects pip install --no-cache-dir   git+https://github.com/nerfstudio-project/gsplat.git
 RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
 
 
