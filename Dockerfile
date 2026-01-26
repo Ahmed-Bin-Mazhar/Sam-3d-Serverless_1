@@ -42,9 +42,19 @@ WORKDIR /workspace/sam-3d-objects
 RUN set -eux; \
     mamba env create -f environments/default.yml
 
+
 # Installing PyTorch & Dependencies (pip indexes)
 ENV PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
 ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
+
+
+RUN mamba run -n sam3d-objects mamba install -y \
+    -c pytorch -c nvidia \
+    pytorch torchvision torchaudio pytorch-cuda=12.1
+
+    RUN mamba run -n sam3d-objects mamba install -y \
+    -c pytorch3d -c pytorch -c nvidia -c conda-forge \
+    pytorch3d
 
 RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wheel && \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
@@ -52,10 +62,11 @@ RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wh
 RUN mamba run -n sam3d-objects pip install --no-cache-dir \
     loguru seaborn
 
+
 RUN mamba run -n sam3d-objects pip install -e ".[dev]" --no-deps && \
     mamba run -n sam3d-objects pip install -e ".[p3d]" --no-deps
 
-
+RUN mamba run -n sam3d-objects pip install --no-cache-dir kaolin==0.17.0
 
 RUN mamba run -n sam3d-objects python -c "import torch, sys, pytorch3d; print('torch cuda:', torch.version.cuda, 'torch:', torch.__version__ , 'pytorch3d:', pytorch3d.__version__)"
 
@@ -66,6 +77,7 @@ RUN set -eux; \
     mamba run -n sam3d-objects pip uninstall -y utils3d || true; \
     mamba run -n sam3d-objects pip install --no-cache-dir \
       "git+https://github.com/EasternJournalist/utils3d.git@c5daf6f6c244d251f252102d09e9b7bcef791a38"
+
 
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir open3d==0.18.0
