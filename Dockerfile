@@ -41,7 +41,7 @@ WORKDIR /workspace/sam-3d-objects
 # ----------------------------
 RUN set -eux; \
     mamba env create -f environments/default.yml
-
+mamba activate sam3d-objects
 # ----------------------------
 # IMPORTANT: avoid NumPy 2.x ABI issues
 # ----------------------------
@@ -51,18 +51,20 @@ RUN mamba run -n sam3d-objects python -m pip install --upgrade pip setuptools wh
 RUN mamba run -n sam3d-objects pip install --no-cache-dir \
     loguru seaborn
 
-# ----------------------------
-# Install torch + cuda + pytorch3d (prebuilt)
-# ----------------------------
-RUN set -eux; \
-    mamba run -n sam3d-objects mamba install -y \
-      -c pytorch -c nvidia -c conda-forge \
-      pytorch torchvision pytorch-cuda=12.1
+# ---- install torch (MUST come first) ----
+RUN mamba run -n sam3d-objects pip install \
+    torch==2.5.1+cu121 \
+    torchvision==0.20.1+cu121 \
+    --extra-index-url https://download.pytorch.org/whl/cu121
 
-RUN set -eux; \
-    mamba run -n sam3d-objects mamba install -y \
-      -c pytorch3d -c pytorch -c nvidia -c conda-forge \
-      pytorch3d
+# ---- install pytorch3d 0.7.8 ----
+RUN mamba run -n sam3d-objects pip install \
+    pytorch3d==0.7.8 \
+    -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py311_cu121_pyt251/download.html
+
+# ---- install gsplat (now torch is visible at build time) ----
+RUN mamba run -n sam3d-objects python -m pip install -v \
+    git+https://github.com/nerfstudio-project/gsplat.git
 
 # Some environments bring a binutils activation script that can break in minimal images
 RUN rm -f /workspace/mamba/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_linux-64.sh 2>/dev/null || true
@@ -96,10 +98,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # upgrade build tooling
-RUN mamba run -n sam3d-objects python -m pip install -U pip setuptools wheel
-# install gsplat
-RUN mamba run -n sam3d-objects python -m pip install -v \
-    git+https://github.com/nerfstudio-project/gsplat.git
+
 RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
 
 
