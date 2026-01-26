@@ -34,14 +34,6 @@ RUN set -eux; \
 ENV PATH=/opt/conda/bin:$PATH
 ENV CONDA_AUTO_ACTIVATE_BASE=false
 
-# Configure channels (use conda config; your mamba didn't support `mamba config --set`)
-RUN set -eux; \
-  conda config --set channel_priority strict; \
-  conda config --remove channels defaults || true; \
-  conda config --add channels pytorch; \
-  conda config --add channels nvidia; \
-  conda config --add channels conda-forge
-
 # ----------------------------
 # Clone repo
 # ----------------------------
@@ -50,7 +42,7 @@ ARG REPO_DIR="/workspace/sam-3d-objects"
 RUN git clone --depth=1 ${REPO_URL} ${REPO_DIR}
 WORKDIR ${REPO_DIR}
 
-# Pip indexes the repo expects
+# pip indexes the repo expects
 ENV PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121"
 ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
 
@@ -63,12 +55,13 @@ RUN set -eux; \
   mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
 # ----------------------------
-# Install CUDA PyTorch via mamba (do NOT let pip touch torch)
+# Install CUDA PyTorch via mamba (IMPORTANT: override channels)
+# This avoids conda-forge interfering and causing libcublas conflicts.
 # ----------------------------
 RUN set -eux; \
-  mamba run -n sam3d-objects mamba install -y \
-    pytorch=2.5.1 torchvision=0.20.1 torchaudio=2.5.1 pytorch-cuda=12.1 \
-    -c pytorch -c nvidia
+  mamba run -n sam3d-objects mamba install -y --override-channels \
+    -c pytorch -c nvidia \
+    pytorch=2.5.1 torchvision=0.20.1 torchaudio=2.5.1 pytorch-cuda=12.1
 
 # Sanity: must be CUDA build
 RUN set -eux; \
@@ -81,34 +74,34 @@ print("cuda available:", torch.cuda.is_available())
 PY
 
 # ----------------------------
-# PyTorch3D (use conda build, avoid git build pain)
+# Install PyTorch3D (try conda first; override channels to avoid CPU torch)
 # ----------------------------
 RUN set -eux; \
-  mamba run -n sam3d-objects mamba install -y \
-    pytorch3d -c pytorch3d -c pytorch -c nvidia -c conda-forge
+  mamba run -n sam3d-objects mamba install -y --override-channels \
+    -c pytorch3d -c pytorch -c nvidia -c conda-forge \
+    pytorch3d || true
 
 # ----------------------------
-# Install sam3d_objects WITHOUT deps (IMPORTANT)
-# If you omit --no-deps, it will install requirements.txt and may override torch.
+# Install sam3d_objects WITHOUT deps (prevents requirements.txt from overriding torch)
 # ----------------------------
 RUN set -eux; \
   mamba run -n sam3d-objects pip install -e . --no-deps; \
   mamba run -n sam3d-objects pip install -e ".[dev]" --no-deps; \
   mamba run -n sam3d-objects pip install -e ".[p3d]" --no-deps
 
-# Pin Werkzeug to what repo expects (your logs showed mismatch)
+# Pin Werkzeug (repo expects 3.0.6)
 RUN set -eux; \
   mamba run -n sam3d-objects pip install --no-cache-dir "Werkzeug==3.0.6"
 
 # ----------------------------
-# Inference deps (install manually; do NOT use -e ".[inference]" without --no-deps)
+# Inference deps (install manually; DON'T do -e ".[inference]" without --no-deps)
 # ----------------------------
 RUN set -eux; \
   mamba run -n sam3d-objects pip install --no-cache-dir \
     kaolin==0.17.0 seaborn==0.13.2 gradio==5.49.0
 
 # ----------------------------
-# gsplat (build CUDA extension)
+# gsplat (CUDA extension build)
 # ----------------------------
 ARG GSPLAT_COMMIT="2323de5905d5e90e035f792fe65bad0fedd413e7"
 RUN set -eux; \
@@ -128,7 +121,7 @@ RUN set -eux; \
   rm -rf /tmp/gsplat
 
 # ----------------------------
-# Your pinned utils3d fork + other deps
+# utils3d pinned fork + other deps
 # ----------------------------
 RUN set -eux; \
   mamba run -n sam3d-objects pip uninstall -y utils3d || true; \
