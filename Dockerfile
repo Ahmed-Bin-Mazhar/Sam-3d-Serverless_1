@@ -59,7 +59,9 @@ RUN mamba run -n sam3d-objects pip install \
 
 # ---- install pytorch3d 0.7.8 ----
 RUN mamba run -n sam3d-objects pip install \
-    pytorch3d==0.7.4
+    pytorch3d==0.7.8 \
+    -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py311_cu121_pyt251/download.html
+
 
 # ---- install gsplat (now torch is visible at build time) ----
 RUN mamba run -n sam3d-objects python -m pip install -v \
