@@ -98,8 +98,7 @@ RUN apt-get update && apt-get install -y \
 # upgrade build tooling
 RUN mamba run -n sam3d-objects python -m pip install -U pip setuptools wheel
 # install gsplat
-RUN mamba run -n sam3d-objects python -m pip install -v \
-    git+https://github.com/nerfstudio-project/gsplat.git
+RUN mamba run -n sam3d-objects python -m pip install -v git+https://github.com/nerfstudio-project/gsplat.git
 RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
 
 
