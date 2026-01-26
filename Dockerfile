@@ -77,9 +77,8 @@ RUN set -eux; \
 RUN set -eux; \
     mamba run -n sam3d-objects pip install --no-cache-dir -e . --no-deps
 
-# Apply patch (use python to avoid exec permission issues)
-RUN set -eux; \
-    mamba run -n sam3d-objects python ./patching/hydra
+RUN PIP_FIND_LINKS=https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html \
+    pip install -e '.[inference]'
 
 # ----------------------------
 # utils3d pin (your known-good)
@@ -91,10 +90,16 @@ RUN set -eux; \
 
 
 RUN mamba run -n sam3d-objects pip install --no-cache-dir open3d==0.18.0
-RUN mamba run -n sam3d-objects pip install --no-cache-dir kaolin==0.17.0
 RUN mamba run -n sam3d-objects pip install --no-cache-dir gradio==5.49.0
 RUN mamba run -n sam3d-objects pip install --no-cache-dir   git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7
 RUN mamba run -n sam3d-objects pip install --no-cache-dir timm
+
+
+# Apply patch (use python to avoid exec permission issues)
+RUN set -eux; \
+    mamba run -n sam3d-objects python ./patching/hydra
+
+
 
 # ----------------------------
 # Runtime deps + RunPod SDK + HF client
