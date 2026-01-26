@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 # CUDA paths (helps torch extensions like gsplat find CUDA)
-ENV CUDA_HOME=/usr/local/cuda
+ENV CUDA_HOME=/usr/local/cuda-12.1
 ENV PATH=/usr/local/cuda/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
@@ -109,16 +109,24 @@ RUN set -eux; \
 # ---- gsplat (clone + local install to avoid metadata-generation issues) ----
 # ---- gsplat (clone + local install) ----
 RUN set -eux; \
-    rm -rf /tmp/gsplat; \
-    git clone --recursive https://github.com/nerfstudio-project/gsplat.git /tmp/gsplat; \
-    cd /tmp/gsplat; \
-    git checkout 2323de5905d5e90e035f792fe65bad0fedd413e7; \
-    git submodule update --init --recursive; \
-    env CUDA_HOME=/usr/local/cuda \
-        PATH="/usr/local/cuda/bin:$PATH" \
-        LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
-        TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0" \
-    mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation -e .; \
+  echo "CUDA_HOME=$CUDA_HOME"; \
+  ls -la /usr/local/cuda; \
+  ls -la /usr/local/cuda/lib64 || true; \
+  ls -la /usr/local/cuda/include || true; \
+  which nvcc || true; \
+  nvcc --version || true; \
+  mamba run -n sam3d-objects python - <<'PY'
+        import os, torch
+        print("CUDA_HOME env:", os.environ.get("CUDA_HOME"))
+        print("torch:", torch.__version__)
+        print("torch.version.cuda:", torch.version.cuda)
+    PY
+
+env CUDA_HOME=/usr/local/cuda-12.1 \
+    PATH="/usr/local/cuda-12.1/bin:$PATH" \
+    LD_LIBRARY_PATH="/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH" \
+    TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0" \
+    mamba run -n sam3d-objects pip install --no-cache-dir --no-build-isolation -e . \
     rm -rf /tmp/gsplat
 
 
