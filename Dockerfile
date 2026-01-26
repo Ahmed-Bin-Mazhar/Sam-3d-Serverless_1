@@ -24,7 +24,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # ----------------------------
-# Miniforge (mamba)
+# Miniforge (mamba + conda)
 # ----------------------------
 RUN set -eux; \
     wget -q "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh" \
@@ -35,12 +35,13 @@ RUN set -eux; \
 ENV PATH=/workspace/mamba/bin:$PATH
 ENV CONDA_AUTO_ACTIVATE_BASE=false
 
-# Make conda channel priority strict (helps prevent CPU torch from conda-forge)
+# Prefer channels + strict priority (use conda, not mamba)
 RUN set -eux; \
-    mamba config --set channel_priority strict; \
-    mamba config --prepend channels conda-forge; \
-    mamba config --prepend channels nvidia; \
-    mamba config --prepend channels pytorch
+    conda config --set channel_priority strict; \
+    conda config --remove channels defaults || true; \
+    conda config --add channels conda-forge; \
+    conda config --add channels nvidia; \
+    conda config --add channels pytorch
 
 # ----------------------------
 # Repo
@@ -70,13 +71,11 @@ RUN set -eux; \
     mamba run -n sam3d-objects pip install --no-cache-dir "numpy<2"
 
 # ----------------------------
-# FORCE CUDA PyTorch (your earlier builds installed CPU torch)
+# FORCE CUDA PyTorch (remove any CPU torch first)
 # ----------------------------
 RUN set -eux; \
-    # remove anything default.yml may have pulled in (often CPU builds)
     mamba run -n sam3d-objects mamba remove -y pytorch torchvision torchaudio pytorch-cuda libtorch || true; \
     mamba run -n sam3d-objects pip uninstall -y torch torchvision torchaudio || true; \
-    # install CUDA builds from pytorch+nvidia only
     mamba run -n sam3d-objects mamba install -y \
       pytorch=2.5.1 torchvision=0.20.1 torchaudio=2.5.1 pytorch-cuda=12.1 \
       -c pytorch -c nvidia --override-channels
@@ -105,7 +104,7 @@ RUN set -eux; \
     mamba run -n sam3d-objects pip install --no-cache-dir loguru seaborn
 
 # ----------------------------
-# Install project extras WITHOUT deps (avoids troublesome deps like nvidia-pyindex)
+# Install project extras WITHOUT deps (avoids nvidia-pyindex etc)
 # ----------------------------
 RUN set -eux; \
     mamba run -n sam3d-objects pip install -e ".[dev]" --no-deps; \
@@ -117,7 +116,7 @@ RUN set -eux; \
 
 # ----------------------------
 # gsplat (CUDA extension)
-# - Needs CUDA_HOME visible INSIDE the build backend
+# - Needs CUDA_HOME visible INSIDE build backend
 # - Disable build isolation so it can see torch already installed
 # ----------------------------
 ARG GSPLAT_COMMIT="2323de5905d5e90e035f792fe65bad0fedd413e7"
