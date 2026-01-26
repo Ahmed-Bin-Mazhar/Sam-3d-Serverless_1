@@ -52,20 +52,23 @@ RUN mamba run -n sam3d-objects pip install --no-cache-dir \
     loguru seaborn
 
 # ---- install torch (MUST come first) ----
-RUN mamba run -n sam3d-objects pip install \
-    torch==2.5.1+cu121 \
-    torchvision==0.20.1+cu121 \
+# upgrade pip & build tools
+RUN pip install --upgrade pip setuptools wheel
+
+# install torch first
+RUN pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
-# ---- install pytorch3d 0.7.8 ----
-RUN mamba run -n sam3d-objects pip install \
-    pytorch3d==0.7.8 \
+# install pytorch3d using official wheel
+RUN pip install pytorch3d==0.7.8 \
     -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py311_cu121_pyt251/download.html
 
+# sanity check
+RUN python -c "import torch; import pytorch3d; print(torch.cuda.is_available())"
 
-# ---- install gsplat (now torch is visible at build time) ----
-RUN mamba run -n sam3d-objects python -m pip install -v \
-    git+https://github.com/nerfstudio-project/gsplat.git
+# install gsplat
+RUN pip install git+https://github.com/nerfstudio-project/gsplat.git
+
 
 # Some environments bring a binutils activation script that can break in minimal images
 RUN rm -f /workspace/mamba/envs/sam3d-objects/etc/conda/activate.d/activate-binutils_linux-64.sh 2>/dev/null || true
